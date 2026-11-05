@@ -4,14 +4,15 @@
  */
 import { ModelError } from './errors.js';
 import {
+  DEFAULT_IDLE_TIMEOUT_MS,
   defaultFetch,
   isPlainObject,
   parseEventData,
   parseToolArgs,
-  postForStream,
-  sseEvents,
+  streamSSE,
   type FetchLike,
 } from './http.js';
+import type { SSEMessage } from './sse.js';
 import {
   emptyUsage,
   type AssistantContent,
@@ -41,6 +42,11 @@ export interface OpenAIOptions {
   headers?: Record<string, string>;
   /** Merged into the request body last, e.g. `{ temperature: 0.2 }` or `{ reasoning_effort: 'low' }`. */
   extraBody?: Record<string, unknown>;
+  /**
+   * Give up when no bytes arrive for this long. Defaults to 60 s; 0 disables. Raise it for
+   * reasoning models that think for minutes before sending anything.
+   */
+  idleTimeoutMs?: number;
   fetch?: FetchLike;
 }
 
@@ -76,15 +82,17 @@ export function createOpenAI(options: OpenAIOptions): ModelAdapter {
         }));
       }
       if (options.maxTokens !== undefined) body[maxTokensField] = options.maxTokens;
-      const stream = await postForStream(
-        'openai',
-        fetchImpl,
-        `${baseURL}/chat/completions`,
-        headers,
-        { ...body, ...options.extraBody },
-        request.signal,
+      yield* readStream(
+        streamSSE({
+          provider: 'openai',
+          fetchImpl,
+          url: `${baseURL}/chat/completions`,
+          headers,
+          body: { ...body, ...options.extraBody },
+          signal: request.signal,
+          idleTimeoutMs: options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+        }),
       );
-      yield* readStream(stream, request.signal);
     },
   };
 }
@@ -196,7 +204,7 @@ interface PendingCall {
   args: string;
 }
 
-async function* readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal | undefined): AsyncGenerator<ModelEvent> {
+async function* readStream(messages: AsyncIterable<SSEMessage>): AsyncGenerator<ModelEvent> {
   let text = '';
   const calls = new Map<number, PendingCall>();
   const usage = emptyUsage();
@@ -204,7 +212,7 @@ async function* readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal
   let sawDone = false;
   let servedBy: string | undefined;
 
-  for await (const sse of sseEvents('openai', body, signal)) {
+  for await (const sse of messages) {
     const data = sse.data.trim();
     if (!data) continue;
     if (data === '[DONE]') {

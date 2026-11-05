@@ -12,14 +12,15 @@
  */
 import { ModelError } from './errors.js';
 import {
+  DEFAULT_IDLE_TIMEOUT_MS,
   defaultFetch,
   isPlainObject,
   parseEventData,
   parseToolArgs,
-  postForStream,
-  sseEvents,
+  streamSSE,
   type FetchLike,
 } from './http.js';
+import type { SSEMessage } from './sse.js';
 import type {
   AssistantContent,
   AssistantMessage,
@@ -64,6 +65,8 @@ export interface AnthropicOptions {
   headers?: Record<string, string>;
   /** Merged into the request body last (overrides anything above). */
   extraBody?: Record<string, unknown>;
+  /** Give up when no bytes arrive for this long (pings count). Defaults to 60 s; 0 disables. */
+  idleTimeoutMs?: number;
   fetch?: FetchLike;
 }
 
@@ -116,15 +119,17 @@ export function createAnthropic(options: AnthropicOptions): ModelAdapter {
     provider: 'anthropic',
     model: options.model,
     async *stream(request) {
-      const body = await postForStream(
-        'anthropic',
-        fetchImpl,
-        `${baseURL}/v1/messages`,
-        headers,
-        buildBody(request),
-        request.signal,
+      yield* readStream(
+        streamSSE({
+          provider: 'anthropic',
+          fetchImpl,
+          url: `${baseURL}/v1/messages`,
+          headers,
+          body: buildBody(request),
+          signal: request.signal,
+          idleTimeoutMs: options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS,
+        }),
       );
-      yield* readStream(body, request.signal);
     },
   };
 }
@@ -231,7 +236,7 @@ function readUsage(target: RawUsage, usage: unknown): void {
   if (typeof usage.cache_creation_input_tokens === 'number') target.cacheWrite = usage.cache_creation_input_tokens;
 }
 
-async function* readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal | undefined): AsyncGenerator<ModelEvent> {
+async function* readStream(messages: AsyncIterable<SSEMessage>): AsyncGenerator<ModelEvent> {
   const blocks: (Block | undefined)[] = [];
   const toolJson = new Map<number, string>();
   const usage: RawUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -240,7 +245,7 @@ async function* readStream(body: ReadableStream<Uint8Array>, signal: AbortSignal
   let servedBy: string | undefined;
   let finished = false;
 
-  for await (const sse of sseEvents('anthropic', body, signal)) {
+  for await (const sse of messages) {
     if (!sse.data) continue;
     const event = parseEventData('anthropic', sse.data);
     const index = typeof event.index === 'number' ? event.index : -1;
