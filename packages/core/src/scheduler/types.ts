@@ -1,4 +1,5 @@
 import type { ContextBuilder, TurnRequest } from '../context/types.js';
+import type { Logger } from '../log/log.js';
 import type { Tool, TurnEndReason } from '../loop/types.js';
 import type { ModelAdapter, Usage } from '../model/types.js';
 import type { ReducerOptions } from '../state/reducer.js';
@@ -47,8 +48,10 @@ export interface SchedulerOptions {
   /** Time limit per turn. */
   turnTimeoutMs?: number;
   reducer?: ReducerOptions;
-  /** Sees every session's output, e.g. for logging. */
+  /** Sees every session's output. */
   onOutput?: (sessionId: string, output: AgentOutput) => void;
+  /** Records events, turns and every model call with exactly what was sent (see log/). */
+  logger?: Logger;
 }
 
 export interface Scheduler {

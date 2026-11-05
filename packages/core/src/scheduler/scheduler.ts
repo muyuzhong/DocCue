@@ -11,6 +11,7 @@
  * if the turn ends first, it starts the next turn.
  */
 import type { TurnRequest } from '../context/types.js';
+import { describeError, safeLog, withModelLog } from '../log/log.js';
 import { runTurn } from '../loop/run-turn.js';
 import type { LoopEvent, TurnEnd } from '../loop/types.js';
 import { ModelError } from '../model/errors.js';
@@ -117,6 +118,7 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
   }
 
   async function handle(actor: Actor, event: QueuedEvent): Promise<void> {
+    if (event.type !== 'turn_finished') safeLog(options.logger, { kind: 'event', at: now(), sessionId: actor.id, event });
     switch (event.type) {
       case 'cancel':
         actor.turn?.controller.abort();
@@ -149,6 +151,7 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
     const controller = new AbortController();
     actor.turn = { id: turnId, controller };
     emit(actor.id, { type: 'turn_start', turnId, reason: request.reason });
+    safeLog(options.logger, { kind: 'turn_start', at: now(), sessionId: actor.id, turnId, reason: request.reason });
     void runInBackground(actor, turnId, request, session, controller.signal)
       .then((end) => enqueue(actor, { type: 'turn_finished', turnId, end }))
       // A failure here was already reported as an `error` output by `drain`.
@@ -166,8 +169,13 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
       const prepared = await options.context.prepare({ session, request, getSession: () => load(actor.id) });
       const takePending = (): Message[] =>
         actor.pending.splice(0).map((event): Message => ({ role: 'user', content: event.content }));
+      let step = 0;
+      const logger = options.logger;
+      const model = logger
+        ? withModelLog(options.model, (record) => logger({ ...record, sessionId: actor.id, turnId, step: ++step }), now)
+        : options.model;
       const events = runTurn({
-        model: options.model,
+        model,
         messages: prepared.messages,
         signal,
         ...(prepared.system ? { system: prepared.system } : {}),
@@ -225,6 +233,15 @@ export function createScheduler(options: SchedulerOptions): Scheduler {
       ? { message: end.error.message, ...(end.error instanceof ModelError && end.error.code ? { code: end.error.code } : {}) }
       : undefined;
     emit(actor.id, { type: 'turn_end', turnId, reason: end.reason, usage: end.usage, ...(error ? { error } : {}) });
+    safeLog(options.logger, {
+      kind: 'turn_end',
+      at: now(),
+      sessionId: actor.id,
+      turnId,
+      reason: end.reason,
+      usage: end.usage,
+      ...(end.error ? { error: describeError(end.error) } : {}),
+    });
     // Questions asked during the turn that it never saw: apply them now (the first one starts
     // the next turn; any after it are handed to that turn).
     for (const message of actor.pending.splice(0)) await handle(actor, message);

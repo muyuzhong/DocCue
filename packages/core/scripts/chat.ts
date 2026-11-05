@@ -7,10 +7,22 @@
  *
  * Type a message and press Enter; you can keep typing while an answer streams (it is queued).
  * Ctrl-C stops the current answer; Ctrl-C when idle (or Ctrl-D) exits. `/help` lists commands.
+ * Every event, turn and model call is logged to packages/core/.logs/ as JSON lines (replay a call
+ * with `pnpm replay`); DOCCUE_LOG=off turns that off.
  * Model settings come from environment variables (see env-model.ts).
  */
+import { appendFileSync, mkdirSync } from 'node:fs';
 import readline from 'node:readline';
-import { createScheduler, renderStatus, statusContext, withRetry, type ActiveError, type TimelineEntry } from '../src/index.js';
+import {
+  createScheduler,
+  renderStatus,
+  statusContext,
+  toJsonLine,
+  withRetry,
+  type ActiveError,
+  type Logger,
+  type TimelineEntry,
+} from '../src/index.js';
 import { MODEL_USAGE, modelFromEnv } from './env-model.js';
 
 const SESSION = 'cli';
@@ -25,7 +37,18 @@ const HELP = `命令（模拟界面上发生的事，下一次提问时模型会
   /history                                  看会话里存的消息`;
 
 const model = modelFromEnv(`用法：pnpm chat\n\n${MODEL_USAGE}`);
-const scheduler = createScheduler({ model: withRetry(model), context: statusContext() });
+
+function fileLogger(): { logger: Logger; path: string } | undefined {
+  if (process.env.DOCCUE_LOG === 'off') return undefined;
+  const dir = new URL('../.logs/', import.meta.url);
+  mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  const file = new URL(`chat-${stamp}.jsonl`, dir);
+  return { path: file.pathname, logger: (record) => appendFileSync(file, `${toJsonLine(record)}\n`) };
+}
+
+const log = fileLogger();
+const scheduler = createScheduler({ model: withRetry(model), context: statusContext(), ...(log ? { logger: log.logger } : {}) });
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '你：' });
 let busy = false;
 let errors: ActiveError[] = [];
@@ -175,4 +198,5 @@ rl.on('close', () => {
 });
 
 console.log(`[${model.provider} / ${model.model}] 输入问题回车发送；回答中 Ctrl-C 停止；/help 查看模拟界面的命令。`);
+if (log) console.log(`[日志] ${log.path}`);
 rl.prompt();
