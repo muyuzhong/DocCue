@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "try": "tsx scripts/try.ts"
+    "try": "tsx scripts/try.ts",
+    "chat": "tsx scripts/chat.ts"
   }
 }
