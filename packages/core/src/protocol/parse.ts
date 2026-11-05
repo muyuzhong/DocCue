@@ -55,6 +55,10 @@ export const DEFAULT_LIMITS: ProtocolLimits = {
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
 
 const SESSION_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+export function isValidSessionId(value: unknown): value is string {
+  return typeof value === 'string' && SESSION_ID.test(value);
+}
 const IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const ERROR_SOURCES = new Set(['page', 'js', 'network']);
@@ -100,7 +104,7 @@ export function parseInbound(raw: unknown, limits: Partial<ProtocolLimits> = {})
   const reader = new Reader({ ...DEFAULT_LIMITS, ...limits });
   const body = reader.object(raw, 'body');
   if (!body) return { ok: false, errors: reader.errors };
-  const sessionId = typeof body.sessionId === 'string' && SESSION_ID.test(body.sessionId) ? body.sessionId : undefined;
+  const sessionId = isValidSessionId(body.sessionId) ? body.sessionId : undefined;
   if (!sessionId) reader.fail('sessionId', 'expected 1-128 characters of A-Z a-z 0-9 _ . : -');
   const list = reader.array(body.events, 'events');
   const events: InputEvent[] = [];

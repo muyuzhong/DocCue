@@ -11,3 +11,4 @@ export {
 } from './anthropic.js';
 export { OPENAI_BASE_URL, createOpenAI, type OpenAIOptions } from './openai.js';
 export { withRetry, type RetryOptions } from './retry.js';
+export { createModelFromEnv, type ModelEnv } from './env.js';
