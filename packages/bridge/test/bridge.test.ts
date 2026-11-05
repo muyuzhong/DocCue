@@ -56,6 +56,8 @@ describe('createBridge', () => {
     host.dispatchEvent(new Event('change', { bubbles: true }));
     document.querySelector<HTMLButtonElement>('#test')!.click();
     expect(posts).toEqual([]); // nothing leaves the browser before a question
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(bridge.recorded().map((entry) => entry.kind)).toEqual(['input', 'click']);
 
     await bridge.ask('为什么连不上？');
     expect(posts).toHaveLength(1);

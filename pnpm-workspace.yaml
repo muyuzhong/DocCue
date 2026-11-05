@@ -1,5 +1,6 @@
 packages:
   - packages/*
+  - apps/*
 
 # esbuild (used by tsx and vitest) runs a postinstall that checks its own binary.
 allowBuilds:

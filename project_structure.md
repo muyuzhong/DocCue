@@ -9,7 +9,9 @@
 - **第一阶段已完成**：0 模型、1 核心循环、3 上下文、4 状态、5 调度、6 协议，以及横切里的配置、日志与回放、错误与超时。
 - **已用真实模型验证**：OpenAI 兼容接口和 Anthropic 原生接口都跑通了单轮、工具调用、多轮对话；多轮时请求只追加、思考块回传都没有问题。
 - **脚本**：`pnpm try`（单轮）、`pnpm chat`（多轮，可以模拟界面操作，日志写到 `.logs/`）、`pnpm replay`（把日志里的一次调用原样重发）。
-- **下一步（第二阶段）**：7 传输 + 8 最小 bridge（只做感知）+ playground，打通真实网页到 agent 的链路。
+- **第二阶段已完成**：7 传输、8 bridge（感知部分）、playground 演示。已在真实浏览器（本机 Chrome）+ 真实模型上端到端验证：表单校验报错、接口返回 502 两个场景，agent 都根据真实操作答对了。
+- **试用**：`pnpm playground` 打开演示页面；`pnpm --filter @doccue/playground e2e` 用本机 Chrome 自动跑一遍演示。
+- **下一步**：2 工具（`get_screen` / `get_timeline` 按需查看、文档检索）→ 界面动作（高亮、一键代填）→ 首次引导。
 
 ## 总览
 
@@ -95,18 +97,21 @@
 - 首期只用到：用户消息、界面事件、取消 → 文字片段、结束、错误。
 - 已实现 `parseInbound({ sessionId, events })`：结构不对的直接拒绝，错误信息带字段路径；过长的文本截断，过多的条目裁掉；多余字段丢弃。输出事件就是调度层的 `AgentOutput`，本身是纯 JSON。
 
-## 7　传输 ⏸
+## 7　传输 ✅
 
-- Fetch 风格 handler `(Request) => Response`：接收输入事件，用 SSE 返回输出事件；附 Node / Express 适配。
-- 初始化接口：下发引导剧本和 `errorSelectors`。
+- Fetch 风格 handler `createHandler()`：`POST {base}/events` 接收事件（经协议层校验，默认最大 10 MB）；`GET {base}/stream` 用 SSE 推送这个会话的输出（每 15 秒一个心跳，客户端断开就取消订阅）；`GET {base}/debug` 查看 agent 看到的状态栏和界面树（需要显式打开）。
+- Node / Express / Connect 适配：`toNodeHandler()`，放在 `@doccue/core/node` 入口，主入口不引入 Node 专用模块。
+- ⏸ 初始化接口：下发引导剧本和 `errorSelectors`。
 - 鉴权、限流不在这层，由开发者在外面套。
 
-## 8　bridge ⏸
+## 8　bridge ✅（感知部分）
 
-- 感知：事件时间线、界面树、报错采集、截图。
-- 本地引导：静态剧本、多步引导状态机、跨页续引。
-- 界面：Shadow DOM 问答窗、聚光灯、引导气泡、一键代填。
-- 本地存储：时间线放 sessionStorage，引导进度放 localStorage。
+- 感知 ✅：操作时间线（点击、填写的最终值、选择、勾选、页面跳转，操作后 1 秒内引起的报错、提示、弹窗、跳转、接口失败挂在这条操作后面）、控件命名、界面树、报错采集。密码只记"填写过"，`data-cue-ignore` 区域完全跳过。
+- 上传时机 ✅：平时只在浏览器本地记录（sessionStorage，刷新不丢），用户提问时连同界面树、当前报错和问题一次性上传。
+- ⏸ 截图。
+- ⏸ 本地引导：静态剧本、多步引导状态机、跨页续引。
+- ⏸ 界面：Shadow DOM 问答窗、聚光灯、引导气泡、一键代填。问答框目前写在 playground 里。
+- 本地存储：时间线放 sessionStorage ✅，引导进度放 localStorage ⏸。
 - 平台：网页、Electron / Tauri / WebView；原生客户端暂缓。
 
 ## 9　接入 Skill ⏸（可选）
@@ -154,13 +159,13 @@ packages/
     state/       4 状态
     scheduler/   5 调度
     protocol/    6 协议
-    server/      7 传输（预留）
+    server/      7 传输：fetch handler、Node 适配
     log/         横切：日志与回放
     util/        取消、等待等小工具
   core/scripts/  试跑脚本：try.ts（单轮）、chat.ts（多轮）、replay.ts（重发日志里的调用）
   core/test/     测试
   docs/          知识类工具（预留）
-  bridge/        8 bridge（预留）
+  bridge/src/    8 bridge：naming（控件命名）、recorder（操作记录）、screen（界面树）、errors（报错采集）、client、bridge
 skills/doccue-setup/   9 接入 Skill（预留）
-apps/playground/       演示（预留）
+apps/playground/       演示：模拟的数据平台 + 问答框 + "agent 看到了什么"面板；e2e/ 用本机 Chrome 端到端测试
 ```

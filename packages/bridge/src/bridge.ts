@@ -49,6 +49,8 @@ export interface Bridge {
   cancel(): Promise<void>;
   setUser(user: BridgeUser): void;
   onOutput(listener: (output: AgentOutput) => void): () => void;
+  /** Actions recorded locally and not sent yet. */
+  recorded(): TimelineEntry[];
   /** What the next question would send (for debugging). */
   snapshot(): PerceptionSnapshot;
   destroy(): void;
@@ -142,6 +144,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       user = next;
     },
     onOutput: (listener) => client.subscribe(listener),
+    recorded: () => [...unsent],
     snapshot,
     destroy() {
       recorder.stop();

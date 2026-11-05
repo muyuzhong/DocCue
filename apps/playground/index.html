@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>数据平台</title>
+  </head>
+  <body>
+    <div class="app">
+      <nav class="sidebar" aria-label="主菜单">
+        <div class="brand">数据平台</div>
+        <a href="/datasource" data-link>数据源</a>
+        <a href="/datasource/new" data-link>新建数据源</a>
+        <a href="/dashboard" data-link>仪表盘</a>
+      </nav>
+      <main id="main"></main>
+      <aside class="assistant" data-cue-ignore>
+        <header>
+          <strong>应用内助手</strong>
+          <span class="session"></span>
+        </header>
+        <div class="messages" aria-live="off"></div>
+        <form class="composer">
+          <textarea rows="2" placeholder="遇到问题就问我，比如：为什么连不上？"></textarea>
+          <div class="composer-actions">
+            <button type="button" class="stop" hidden>停止</button>
+            <button type="submit" class="send">发送</button>
+          </div>
+        </form>
+        <details class="debug" open>
+          <summary>agent 看到了什么</summary>
+          <h4>本地已记录、等提问时发送的操作</h4>
+          <pre class="recorded">（还没有操作）</pre>
+          <h4>上一次提问时的状态栏</h4>
+          <pre class="status">（还没有提问）</pre>
+          <h4>上一次提问时的界面树</h4>
+          <pre class="screen">（还没有提问）</pre>
+        </details>
+      </aside>
+    </div>
+    <div class="toasts"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

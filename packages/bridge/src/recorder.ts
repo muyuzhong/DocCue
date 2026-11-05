@@ -28,9 +28,13 @@ export interface Recorder {
   stop(): void;
 }
 
+/** An effect is text, or a function giving the text once the action finishes (e.g. a page title
+ * that is only set after the URL changed). */
+type Effect = string | (() => string);
+
 interface Pending {
   entry: TimelineEntry;
-  effects: string[];
+  effects: Effect[];
   timer: ReturnType<typeof setTimeout>;
 }
 
@@ -42,10 +46,10 @@ export function createRecorder(options: RecorderOptions): Recorder {
   const cleanups: Array<() => void> = [];
   let pending: Pending | undefined;
 
+  const currentPath = () => `${document.location?.pathname ?? ''}${document.location?.hash ?? ''}`;
   const currentPage = (): PageInfo => {
-    const path = `${document.location?.pathname ?? ''}${document.location?.hash ?? ''}`;
     const title = clean(document.title);
-    return { path, ...(title ? { title } : {}) };
+    return { path: currentPath(), ...(title ? { title } : {}) };
   };
   let lastPage = currentPage();
 
@@ -54,7 +58,8 @@ export function createRecorder(options: RecorderOptions): Recorder {
     const { entry, effects, timer } = pending;
     clearTimeout(timer);
     pending = undefined;
-    options.onEntry(effects.length > 0 ? { ...entry, result: effects.join('；') } : entry);
+    const texts = [...new Set(effects.map((effect) => (typeof effect === 'function' ? effect() : effect)))];
+    options.onEntry(texts.length > 0 ? { ...entry, result: texts.join('；') } : entry);
   };
 
   const record = (entry: Omit<TimelineEntry, 'at' | 'page'>) => {
@@ -119,16 +124,30 @@ export function createRecorder(options: RecorderOptions): Recorder {
 
   // --- page changes ---------------------------------------------------------------------------
 
+  // Titles of pages we navigated to, read a moment after the URL changed: single-page apps
+  // usually set the title right after.
+  const titles = new Map<string, string>();
   const pageChanged = () => {
-    // Single-page apps often set the title right after changing the URL.
+    const path = currentPath();
+    if (path === lastPage.path) return;
+    // A title equal to the previous page's has not been updated yet: fall back to the path.
+    const fromTitle = lastPage.title;
+    lastPage = { path };
+    // The action in progress right now caused this, even if another one starts before the
+    // title is known.
+    const owner = pending;
+    const label = () => {
+      const title = currentPath() === path ? clean(document.title) : '';
+      return titles.get(path) || (title && title !== fromTitle ? title : '') || path;
+    };
+    owner?.effects.push(() => `进入页面「${label()}」`);
     setTimeout(() => {
+      if (currentPath() !== path) return;
       const page = currentPage();
-      if (page.path === lastPage.path) return;
+      if (page.title) titles.set(path, page.title);
       lastPage = page;
       options.onPage(page);
-      const label = page.title ?? page.path;
-      if (pending) effect(`进入页面「${label}」`, 'navigate');
-      else options.onEntry({ at: Date.now(), kind: 'navigate', target: label, page: page.path });
+      if (!owner) options.onEntry({ at: Date.now(), kind: 'navigate', target: label(), page: path });
     }, 50);
   };
   if (view) {

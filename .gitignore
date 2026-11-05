@@ -3,3 +3,4 @@ dist/
 *.log
 .logs/
 .env
+.e2e/

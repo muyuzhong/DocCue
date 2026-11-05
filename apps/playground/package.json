@@ -1,0 +1,18 @@
+{
+  "name": "@doccue/playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx --conditions=source server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "e2e": "tsx --conditions=source e2e/demo.ts"
+  },
+  "dependencies": {
+    "@doccue/bridge": "workspace:*",
+    "@doccue/core": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1",
+    "vite": "^8.3.5"
+  }
+}

@@ -9,7 +9,8 @@
     "build": "pnpm -r build",
     "try": "pnpm --filter @doccue/core try",
     "chat": "pnpm --filter @doccue/core chat",
-    "replay": "pnpm --filter @doccue/core replay"
+    "replay": "pnpm --filter @doccue/core replay",
+    "playground": "pnpm --filter @doccue/playground dev"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

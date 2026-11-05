@@ -106,6 +106,26 @@ describe('createRecorder', () => {
     expect(pages.map((page) => page.path)).toEqual(['/datasource', '/dashboard']);
   });
 
+  it('keeps a page change with the click that caused it, even when the next action is quick', async () => {
+    start();
+    $('#list').addEventListener('click', (event) => {
+      event.preventDefault();
+      history.pushState({}, '', '/datasource');
+      setTimeout(() => (document.title = '数据源列表'), 20);
+    });
+    $('#list').click();
+    const host = $<HTMLInputElement>('#host');
+    host.value = '127.0.0.1';
+    change(host);
+    await sleep(150);
+    // The title wasn't set yet when the click's record closed, so the path stands in for it.
+    expect(entries.map(({ kind, result }) => ({ kind, result }))).toEqual([
+      { kind: 'click', result: '进入页面「/datasource」' },
+      { kind: 'input', result: undefined },
+    ]);
+    expect(entries[1]!.page).toBe('/datasource');
+  });
+
   it('reports failed requests with the server message, but not the bridge’s own', async () => {
     window.fetch = async (input: RequestInfo | URL) =>
       String(input).includes('/doccue/')

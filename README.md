@@ -6,7 +6,7 @@ DocCue 是一个嵌进 Web 应用里的 AI 助手：用户**第一次进来时�
 
 它不是一套完整的客服系统，而是一个**开箱即用的快捷 Agent**：接入 Skill + 前端 SDK + 后端 handler。登录鉴权、数据库、部署这些开发者系统里本来就有的能力，DocCue 不重复造。
 
-> **当前状态**：第一阶段（agent 核心）已完成，并用真实模型验证过。前端 SDK（bridge）、HTTP 传输层、工具（文档检索等）、页面动作、首次引导还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
+> **当前状态**：agent 核心、HTTP 传输层、前端 SDK 的感知部分已完成，并在真实浏览器 + 真实模型上端到端验证过。工具（文档检索等）、页面动作（高亮、代填）、首次引导还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
 
 ## 它怎么知道用户做了什么
 
@@ -39,10 +39,12 @@ git clone https://github.com/muyuzhong/DocCue.git
 cd DocCue
 pnpm install
 cp .env.example .env    # 填入模型的 key，说明见 .env.example
-pnpm chat
+pnpm playground         # 打开 http://localhost:5173
 ```
 
-`pnpm chat` 是一个多轮对话的命令行，可以用命令模拟 bridge 上报的界面操作，在没有前端的情况下体验状态栏的效果：
+playground 是一个模拟的「数据平台」，右侧是问答框。试试：进入「新建数据源」，主机地址填 `http://127.0.0.1:5432`，点「测试连接」，然后问「为什么连不上？」。问答框下面的「agent 看到了什么」会实时显示 bridge 记下的操作，以及提问时发给模型的状态栏和界面树。
+
+不想开浏览器的话，`pnpm chat` 是一个多轮对话的命令行，可以用命令模拟 bridge 上报的界面操作：
 
 ```text
 /page /datasource/new 新建数据源
@@ -58,6 +60,8 @@ pnpm chat
 
 | 命令 | 作用 |
 | :--- | :--- |
+| `pnpm playground` | 演示应用，日志写到 `apps/playground/.logs/` |
+| `pnpm --filter @doccue/playground e2e` | 用本机 Chrome 自动操作演示应用并提问，打印 agent 看到的内容和回答 |
 | `pnpm try [--tool] "问题"` | 跑单轮；`--tool` 挂一个查时间的演示工具，测多步循环 |
 | `pnpm chat` | 多轮对话，日志写到 `packages/core/.logs/` |
 | `pnpm replay <日志> [编号]` | 列出日志里的模型调用；带编号则把那次调用原样重发，对比前后两次回答 |
@@ -65,45 +69,40 @@ pnpm chat
 
 ## 作为库使用
 
+**后端**：建一个调度器，把处理函数挂到你的服务上。
+
 ```ts
-import { createAnthropic, createScheduler, parseInbound, statusContext, withRetry } from '@doccue/core';
+import { createHandler, createModelFromEnv, createScheduler, statusContext, withRetry } from '@doccue/core';
+import { toNodeHandler } from '@doccue/core/node';
 
 const scheduler = createScheduler({
-  model: withRetry(createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY!, model: 'claude-opus-5-5' })),
+  model: withRetry(createModelFromEnv(process.env)),
   context: statusContext({ instructions: '你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。' }),
 });
 
-// 订阅输出：开始、状态、文字片段、结束、错误
-scheduler.subscribe('session-1', (output) => {
-  if (output.type === 'text') process.stdout.write(output.delta);
-  if (output.type === 'turn_end') console.log(`\n[${output.reason}]`);
-});
-
-// 界面上发生的事（将来由 bridge 上报，现在可以手动构造）
-await scheduler.push('session-1', {
-  type: 'perception',
-  page: { path: '/datasource/new', title: '新建数据源' },
-  timeline: [
-    { at: Date.now(), kind: 'input', target: '输入框「主机地址」', value: 'http://127.0.0.1:5432' },
-    { at: Date.now(), kind: 'click', target: '按钮「测试连接」', result: '出现报错「Invalid Host Format」' },
-  ],
-  errors: [{ text: 'Invalid Host Format', target: '输入框「主机地址」' }],
-});
-
-// 用户提问：触发一轮回答，模型会在状态栏里看到上面这些
-await scheduler.push('session-1', { type: 'user_message', content: '为什么连不上？' });
-await scheduler.idle('session-1');
-
-// 在自己的 HTTP 路由里接收 bridge 的数据：先校验，再交给调度层
-export async function handleEvents(request: Request): Promise<Response> {
-  const parsed = parseInbound(await request.json());
-  if (!parsed.ok) return Response.json({ errors: parsed.errors }, { status: 400 });
-  for (const event of parsed.value.events) await scheduler.push(parsed.value.sessionId, event);
-  return new Response(null, { status: 204 });
-}
+// Express / Connect / node:http；Fetch 风格的框架（Hono、Next.js 路由等）直接用 createHandler 的返回值
+app.use('/doccue', toNodeHandler(createHandler({ scheduler, basePath: '/doccue' })));
 ```
 
-鉴权、限流由你在自己的路由和中间件里处理；会话默认存在进程内存，可以通过 `store` 换成自己的存储。
+**前端**：一行接入 bridge，再把你的问答框接上去。
+
+```ts
+import { createBridge } from '@doccue/bridge';
+
+const bridge = createBridge({ endpoint: '/doccue' });   // 从这一行开始记录用户操作
+
+bridge.onOutput((output) => {
+  if (output.type === 'text') console.log(output.delta);       // 流式回答
+  if (output.type === 'turn_end') console.log(output.reason);
+});
+
+// 用户在你的问答框里提问时：连同记录下的操作、界面树和报错一起发给 agent
+await bridge.ask('为什么连不上？');
+```
+
+问答框本身要加 `data-cue-ignore`，免得用户在里面打字也被当成操作记下来。bridge 平时只在浏览器本地记录，提问时才把操作、界面树和报错一次性发出去；密码只记"填写过"，不记内容。
+
+鉴权、限流由你在自己的路由和中间件里处理；会话默认存在进程内存，可以通过 `store` 换成自己的存储。不用 bridge 也可以直接调用调度层：`scheduler.push(sessionId, event)` 送入事件，`scheduler.subscribe(sessionId, listener)` 接收输出。
 
 ## 模型接入
 
@@ -123,8 +122,8 @@ export async function handleEvents(request: Request): Promise<Response> {
 ```text
 外圈  开发者系统（鉴权、持久化、部署，不归 DocCue）
  └ 9  接入 Skill（开发期，可选）           ⏸
-    └ 8  bridge（嵌在宿主应用里）            ⏸
-       └ 7  传输：HTTP + SSE                 ⏸
+    └ 8  bridge（嵌在宿主应用里）            ✅ 感知
+       └ 7  传输：HTTP + SSE                 ✅
           └ 6  协议：校验输入事件            ✅
              └ 5  调度：事件队列 · 触发器    ✅
                 └ 4  状态：会话              ✅
@@ -149,8 +148,11 @@ packages/core/
     scheduler/   事件队列、触发器
     protocol/    输入校验
     log/         日志与回放
+    server/      HTTP 处理函数、Node 适配
   scripts/       try / chat / replay
   test/          测试
+packages/bridge/src/     前端 SDK：控件命名、操作记录、界面树、报错采集、与后端通信
+apps/playground/         演示应用 + 端到端测试
 architecture_design.md   架构设计
 project_structure.md     分层结构与进度
 ```
@@ -158,7 +160,8 @@ project_structure.md     分层结构与进度
 ## 路线图
 
 - [x] **第一阶段：agent 核心**。模型适配、核心循环、上下文与状态栏、会话状态、事件调度、输入协议、日志与回放、超时与重试。
-- [ ] **第二阶段：打通真实网页**。HTTP + SSE 传输层、最小 bridge（只做感知：操作记录、控件命名、界面树、报错采集）、playground 演示页面。
+- [x] **第二阶段：打通真实网页**。HTTP + SSE 传输层、bridge 的感知部分（操作记录、控件命名、界面树、报错采集）、playground 演示应用，已在真实浏览器里端到端验证。
+- [ ] **截图**：界面树看不出问题时（图表、画布）按需截图。
 - [ ] **工具**：`get_screen` / `get_timeline` 按需查看、截图、产品文档检索。
 - [ ] **页面动作**：高亮控件、一键代填。
 - [ ] **首次引导**：静态剧本 + AI 个性化引导，引导中可以随时提问。
