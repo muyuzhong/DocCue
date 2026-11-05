@@ -1,0 +1,30 @@
+{
+  "name": "@doccue/bridge",
+  "version": "0.0.1",
+  "description": "DocCue bridge: records what the user does in a web page and talks to the agent",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@doccue/core": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.4"
+  }
+}
