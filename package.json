@@ -1,0 +1,18 @@
+{
+  "name": "doccue",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.12.0",
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "build": "pnpm -r build",
+    "try": "pnpm --filter @doccue/core try"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
+  }
+}
