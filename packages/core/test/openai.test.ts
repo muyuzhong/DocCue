@@ -79,6 +79,33 @@ describe('createOpenAI', () => {
     ]);
   });
 
+  it('merges consecutive user messages for chat templates that require alternating roles', async () => {
+    const { fetch, calls } = mockFetch(sseResponse([chunk({ content: 'ok' }, 'stop')]));
+    const model = createOpenAI({ model: 'm', baseURL: 'http://local/v1', fetch });
+    await collect(
+      model.stream({
+        messages: [
+          { role: 'user', content: '为什么连不上？' },
+          { role: 'user', content: [{ type: 'text', text: '<status>…</status>' }] },
+          { role: 'assistant', content: [{ type: 'text', text: '看看' }] },
+          { role: 'user', content: '图' },
+          { role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'AA' }] },
+        ],
+      }),
+    );
+    expect(calls[0]!.body.messages).toEqual([
+      { role: 'user', content: '为什么连不上？\n\n<status>…</status>' },
+      { role: 'assistant', content: '看看' },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '图' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } },
+        ],
+      },
+    ]);
+  });
+
   it('works with a local server: no auth header, max_tokens field', async () => {
     const { fetch, calls } = mockFetch(sseResponse([chunk({ content: 'hi' }, 'stop')]));
     const model = createOpenAI({ model: 'qwen3', baseURL: 'http://localhost:11434/v1/', maxTokens: 50, fetch });

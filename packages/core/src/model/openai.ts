@@ -90,13 +90,19 @@ export function createOpenAI(options: OpenAIOptions): ModelAdapter {
 }
 
 /** Converts neutral messages to Chat Completions messages. Tool results that contain images
- * are followed by one user message carrying those images (tool messages are text-only). */
+ * are followed by one user message carrying those images (tool messages are text-only).
+ * Consecutive user messages are merged: some chat templates (e.g. Mistral's) reject them. */
 export function toOpenAIMessages(system: string | undefined, messages: readonly Message[]): WireMessage[] {
   const out: WireMessage[] = [];
+  const pushUser = (content: WireContent) => {
+    const last = out[out.length - 1];
+    if (last?.role === 'user') last.content = mergeContent(last.content as WireContent, content);
+    else out.push({ role: 'user', content });
+  };
   if (system) out.push({ role: 'system', content: system });
   for (const message of messages) {
     if (message.role === 'user') {
-      out.push({ role: 'user', content: userContent(message.content) });
+      pushUser(userContent(message.content));
     } else if (message.role === 'assistant') {
       const text = message.content
         .filter((part) => part.type === 'text')
@@ -133,13 +139,21 @@ export function toOpenAIMessages(system: string | undefined, messages: readonly 
         if (result.isError) text = `Error: ${text}`;
         out.push({ role: 'tool', tool_call_id: result.callId, content: text });
       }
-      if (images.length > 0) out.push({ role: 'user', content: userContent(images) });
+      if (images.length > 0) pushUser(userContent(images));
     }
   }
   return out;
 }
 
-function userContent(content: string | readonly UserContent[]): string | Record<string, unknown>[] {
+type WireContent = string | Record<string, unknown>[];
+
+function mergeContent(a: WireContent, b: WireContent): WireContent {
+  if (typeof a === 'string' && typeof b === 'string') return `${a}\n\n${b}`;
+  const parts = (content: WireContent) => (typeof content === 'string' ? [{ type: 'text', text: content }] : content);
+  return [...parts(a), ...parts(b)];
+}
+
+function userContent(content: string | readonly UserContent[]): WireContent {
   if (typeof content === 'string') return content;
   // Plain text goes out as a string: some local servers reject content arrays.
   if (content.every((part) => part.type === 'text')) {

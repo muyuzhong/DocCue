@@ -6,6 +6,8 @@ import type { SessionState } from '../state/types.js';
 export interface TurnRequest {
   /** e.g. `user_message`. */
   reason: string;
+  /** For turns the user didn't ask for: why the agent speaks up, shown to the model. */
+  note?: string;
 }
 
 export interface PrepareInput {
