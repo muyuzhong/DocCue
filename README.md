@@ -2,33 +2,44 @@
 
 > Turn static docs into context-aware in-app cues.
 
-DocCue 是一个嵌进 Web 应用里的 AI 助手：用户**第一次进来时带着走一遍引导**，用户**卡住时结合他刚才在界面上做了什么来答疑**，还能直接在页面上高亮控件、帮用户填好正确的值。
+复杂的应用上手慢，文档又放在官网上。DocCue 是**新手引导的 agent 版**：嵌在你的 Web 应用里，用户问"怎么做"或"为什么不行"，它结合用户刚才在界面上做了什么来回答，并在页面上一步步指给用户看。
 
-它不是一套完整的客服系统，而是一个**开箱即用的快捷 Agent**：接入 Skill + 前端 SDK + 后端 handler。登录鉴权、数据库、部署这些开发者系统里本来就有的能力，DocCue 不重复造。
+- **只指不做**：agent 不操控应用，不替用户点击和填写。
+- **只在被问到时出现**：不主动打扰。
+- **接入简单**：前端加一个包，后端挂一个接口。登录鉴权、数据库、部署这些你的系统里本来就有的能力，DocCue 不重复造。
 
-> **当前状态**：agent 核心、HTTP 传输层、前端 SDK 的感知部分已完成，并在真实浏览器 + 真实模型上端到端验证过。工具（文档检索等）、页面动作（高亮、代填）、首次引导还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
+> **当前状态**：答疑已经可用，并在真实浏览器 + 真实模型上端到端验证过。页面上的可视引导、文档检索、自带问答窗还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
 
 ## 它怎么知道用户做了什么
 
-前端 SDK（bridge）会像无埋点分析一样，自动记录用户的操作和每一步引起的结果，整理成模型能读的格式。用户提问时，模型会在对话末尾看到一份**状态栏**：
+前端的 bridge 像无埋点分析一样，自动记录用户的操作和每一步引起的后果，连同当前界面一起上报。用户提问时，模型看到的是：
 
 ```text
-<status time="19:02:20">
-页面：新建数据源（/datasource/new）
-当前报错：Invalid Host Format（输入框「主机地址」）
-最近操作：
-19:02:15 填写 输入框「主机地址」 = "http://127.0.0.1:5432"
-19:02:18 点击 按钮「测试连接」 → 出现报错「Invalid Host Format」
-</status>
+<context locale="zh-CN">
+recent actions:
+5s ago: input textbox "主机地址" = "http://127.0.0.1:5432"
+2s ago: click button "测试连接" -> error "Invalid Host Format" on textbox "主机地址"
+screen:
+page "新建数据源" /datasource/new
+[5] heading "新建数据源"
+[6] form "连接信息"
+  [9] textbox "主机地址" = "http://127.0.0.1:5432" (invalid)
+  alert "Invalid Host Format"
+  [10] textbox "端口" = "5432"
+  [14] button "测试连接"
+  [15] button "保存" (disabled)
+</context>
+为什么连不上？
 ```
 
 用户只问了一句"为什么连不上？"，模型就能直接指出：主机地址里多了 `http://`，端口应该填在单独的输入框里。
 
 几个设计上的要点：
 
-- **只追加**：状态有变化时才在末尾追加一份新的状态栏，旧的不删。改动已经发给模型的历史，会让提示词缓存失效，在 Claude 新模型上还会让之前的思考块失效并报错。
-- **事件驱动**：每个会话一个队列，回答进行中，界面事件照样更新状态，取消立刻生效；用户中途追问会排队，历史顺序始终和模型看到的一致。
-- **与平台无关**：agent 核心只认"事件时间线 + 界面树 + 截图"这一种格式，网页、Electron、WebView 客户端的 bridge 都整理成它。
+- **后端无状态**：对话记录放在浏览器，每次请求整份带上。后端可以部署在任何地方，包括无服务器平台。
+- **历史只追加**：已经发给模型的内容从不改动，提示词缓存一直命中，Claude 的思考块也保持有效。
+- **与语言无关**：前端上报结构化数据，控件的角色用 ARIA 的英文词，名字保留界面原文；模型的回答跟随用户的语言。
+- **编号指向控件**：界面里每个控件有一个编号，模型以后用它在页面上指给用户看。
 
 ## 快速开始
 
@@ -42,26 +53,25 @@ cp .env.example .env    # 填入模型的 key，说明见 .env.example
 pnpm playground         # 打开 http://localhost:5173
 ```
 
-playground 是一个模拟的「数据平台」，右侧是问答框。试试：进入「新建数据源」，主机地址填 `http://127.0.0.1:5432`，点「测试连接」，然后问「为什么连不上？」。问答框下面的「agent 看到了什么」会实时显示 bridge 记下的操作，以及提问时发给模型的状态栏和界面树。
+playground 是一个模拟的「数据平台」，右侧是问答框。试试：进入「新建数据源」，主机地址填 `http://127.0.0.1:5432`，点「测试连接」，然后问「为什么连不上？」。问答框下面的「agent 看到了什么」会实时显示 bridge 记下的操作，以及提问时模型看到的现场信息。
 
 不想开浏览器的话，`pnpm chat` 是一个多轮对话的命令行，可以用命令模拟 bridge 上报的界面操作：
 
 ```text
 /page /datasource/new 新建数据源
-/do input 输入框「主机地址」 = http://127.0.0.1:5432
-/do click 按钮「测试连接」 -> 出现报错「Invalid Host Format」
-/error Invalid Host Format
+/do input textbox 主机地址 = http://127.0.0.1:5432
+/do click button 测试连接 -> Invalid Host Format
 为什么连不上？
 ```
 
-`/status` 查看现在的状态栏，`/history` 查看会话里存了什么，`/help` 列出全部命令。回答中可以继续输入（会排队），Ctrl-C 停止当前回答。
+`/context` 查看下一次提问会带上的现场信息，`/reset` 开始新对话，`/help` 列出全部命令。回答中 Ctrl-C 停止当前回答。
 
 其他脚本：
 
 | 命令 | 作用 |
 | :--- | :--- |
 | `pnpm playground` | 演示应用，日志写到 `apps/playground/.logs/` |
-| `pnpm --filter @doccue/playground e2e` | 用本机 Chrome 自动操作演示应用并提问，打印 agent 看到的内容和回答 |
+| `pnpm --filter @doccue/playground e2e` | 用本机 Chrome 自动操作演示应用并提问，打印模型看到的内容和回答 |
 | `pnpm try [--tool] "问题"` | 跑单轮；`--tool` 挂一个查时间的演示工具，测多步循环 |
 | `pnpm chat` | 多轮对话，日志写到 `packages/core/.logs/` |
 | `pnpm replay <日志> [编号]` | 列出日志里的模型调用；带编号则把那次调用原样重发，对比前后两次回答 |
@@ -69,19 +79,20 @@ playground 是一个模拟的「数据平台」，右侧是问答框。试试：
 
 ## 作为库使用
 
-**后端**：建一个调度器，把处理函数挂到你的服务上。
+**后端**：把处理函数挂到你的服务上。
 
 ```ts
-import { createHandler, createModelFromEnv, createScheduler, statusContext, withRetry } from '@doccue/core';
+import { createHandler, createModelFromEnv, withRetry } from '@doccue/core';
 import { toNodeHandler } from '@doccue/core/node';
 
-const scheduler = createScheduler({
+const handler = createHandler({
   model: withRetry(createModelFromEnv(process.env)),
-  context: statusContext({ instructions: '你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。' }),
+  instructions: '你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。',
+  basePath: '/doccue',
 });
 
-// Express / Connect / node:http；Fetch 风格的框架（Hono、Next.js 路由等）直接用 createHandler 的返回值
-app.use('/doccue', toNodeHandler(createHandler({ scheduler, basePath: '/doccue' })));
+// Express / Connect / node:http；Fetch 风格的框架（Hono、Next.js 路由等）直接用 handler
+app.use('/doccue', toNodeHandler(handler));
 ```
 
 **前端**：一行接入 bridge，再把你的问答框接上去。
@@ -89,20 +100,20 @@ app.use('/doccue', toNodeHandler(createHandler({ scheduler, basePath: '/doccue' 
 ```ts
 import { createBridge } from '@doccue/bridge';
 
-const bridge = createBridge({ endpoint: '/doccue' });   // 从这一行开始记录用户操作
+const cue = createBridge({ endpoint: '/doccue' });   // 从这一行开始记录用户操作
 
-bridge.onOutput((output) => {
-  if (output.type === 'text') console.log(output.delta);       // 流式回答
-  if (output.type === 'turn_end') console.log(output.reason);
-});
+cue.on('text', (event) => console.log(event.delta));  // 流式回答
+cue.on('end', (event) => console.log(event.reason));
 
-// 用户在你的问答框里提问时：连同记录下的操作、界面树和报错一起发给 agent
-await bridge.ask('为什么连不上？');
+// 用户在你的问答框里提问时：连同记录下的操作和当前界面一起发给 agent
+await cue.ask('为什么连不上？');
+cue.stop();     // 停止当前回答
+cue.reset();    // 开始新对话
 ```
 
-问答框本身要加 `data-cue-ignore`，免得用户在里面打字也被当成操作记下来。bridge 平时只在浏览器本地记录，提问时才把操作、界面树和报错一次性发出去；密码只记"填写过"，不记内容。
+问答框本身要加 `data-cue-ignore`，免得用户在里面打字也被当成操作记下来。bridge 平时只在浏览器本地记录，提问时才上传；密码只记"填写过"，不记内容。
 
-鉴权、限流由你在自己的路由和中间件里处理；会话默认存在进程内存，可以通过 `store` 换成自己的存储。不用 bridge 也可以直接调用调度层：`scheduler.push(sessionId, event)` 送入事件，`scheduler.subscribe(sessionId, listener)` 接收输出。
+接口是开放的，鉴权和限流由你在自己的路由和中间件里处理。后端不保存对话：对话记录在浏览器的 sessionStorage 里，每个标签页一份。
 
 ## 模型接入
 
@@ -117,54 +128,42 @@ await bridge.ask('为什么连不上？');
 
 ## 架构
 
-项目按"从内到外"分层，外层依赖内层，内层不知道外层，比如核心循环既不知道 HTTP，也不知道 bridge 跑在网页还是客户端里。
+agent 在后端，但它要用的东西（界面、用户的操作、以后的可视引导）大多在浏览器里。所以后端只做一件事：收到完整的对话记录，调模型，流式返回。
 
-```text
-外圈  开发者系统（鉴权、持久化、部署，不归 DocCue）
- └ 9  接入 Skill（开发期，可选）           ⏸
-    └ 8  bridge（嵌在宿主应用里）            ✅ 感知
-       └ 7  传输：HTTP + SSE                 ✅
-          └ 6  协议：校验输入事件            ✅
-             └ 5  调度：事件队列 · 触发器    ✅
-                └ 4  状态：会话              ✅
-                   └ 3  上下文：状态栏       ✅
-                      └ 2  工具              ⏸
-                         └ 1  核心循环       ✅
-                            └ 0  模型        ✅
-横切：配置 · 日志与回放 · 错误与超时         ✅
-```
+| 前端 `@doccue/bridge` | 后端 `@doccue/core` |
+| :--- | :--- |
+| 感知：记录操作及其后果，生成界面快照 | 渲染：把对话记录转成给模型的消息 |
+| 对话：保存记录、发请求、读事件流 | 循环：调模型，执行后端工具 |
+| 引导（开发中）：聚光灯、气泡、步骤推进 | 模型适配、日志与回放 |
 
-每层的细节见 [project_structure.md](project_structure.md)，完整设计见 [architecture_design.md](architecture_design.md)。
+两边交换的数据定义在 `@doccue/protocol`。完整设计见 [architecture_design.md](architecture_design.md)，代码结构和进度见 [project_structure.md](project_structure.md)。
 
 ## 目录结构
 
 ```text
-packages/core/
+packages/protocol/       两边交换的数据（只有类型）
+packages/core/           后端
   src/
-    model/       模型适配器、流式解析、重试
-    loop/        核心循环：调模型 → 执行工具 → 再调模型
-    context/     上下文：system prompt、状态栏
-    state/       会话状态、存储接口
-    scheduler/   事件队列、触发器
-    protocol/    输入校验
-    log/         日志与回放
-    server/      HTTP 处理函数、Node 适配
-  scripts/       try / chat / replay
-  test/          测试
-packages/bridge/src/     前端 SDK：控件命名、操作记录、界面树、报错采集、与后端通信
+    model/               模型适配器、流式解析、重试
+    loop/                核心循环：调模型 → 执行工具 → 再调模型
+    render/              把对话记录渲染成模型消息
+    agent/               处理一次请求
+    protocol/            请求校验
+    server/              HTTP 处理函数、Node 适配
+    log/                 日志与回放
+  scripts/               try / chat / replay
+packages/bridge/src/     前端：控件命名、操作记录、界面快照、报错采集、对话驱动
 apps/playground/         演示应用 + 端到端测试
-architecture_design.md   架构设计
-project_structure.md     分层结构与进度
 ```
 
 ## 路线图
 
-- [x] **第一阶段：agent 核心**。模型适配、核心循环、上下文与状态栏、会话状态、事件调度、输入协议、日志与回放、超时与重试。
-- [x] **第二阶段：打通真实网页**。HTTP + SSE 传输层、bridge 的感知部分（操作记录、控件命名、界面树、报错采集）、playground 演示应用，已在真实浏览器里端到端验证。
-- [ ] **截图**：界面树看不出问题时（图表、画布）按需截图。
-- [ ] **工具**：`get_screen` / `get_timeline` 按需查看、截图、产品文档检索。
-- [ ] **页面动作**：高亮控件、一键代填。
-- [ ] **首次引导**：静态剧本 + AI 个性化引导，引导中可以随时提问。
-- [ ] **接入 Skill**：扫描宿主源码，给命名不准的控件补名字，生成控件说明和引导剧本。
+- [x] **换骨架**：协议、无状态接口、前端对话驱动、结构化感知。答疑可用，已在真实浏览器里端到端验证。
+- [ ] **单屏引导**：在页面上高亮控件并用气泡说明，用户做完一步自动到下一步。
+- [ ] **跨屏引导**：换页后接着引导，刷新后恢复，用户走偏时改道。
+- [ ] **文档检索**：模型按需搜索和阅读你的产品文档。
+- [ ] **自带问答窗**与语言包。
 
-暂不做：脱敏、内置向量检索（RAG）、原生客户端（Qt、WPF、安卓/iOS 原生等）的 bridge。
+以后再做：按需截图（图表、画布）、预置的首次引导、接入 Skill、主动提示、脱敏。
+
+不做：内置向量检索、原生客户端（Qt、WPF、安卓/iOS 原生等）的 bridge。

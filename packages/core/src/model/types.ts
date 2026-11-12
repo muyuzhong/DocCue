@@ -2,6 +2,7 @@
  * Provider-neutral message and event types shared by every model adapter.
  * The agent loop only speaks these types; each adapter translates them to its wire format.
  */
+import type { Usage } from '@doccue/protocol';
 
 /** JSON Schema object describing a tool's parameters. */
 export type JsonSchema = Record<string, unknown>;
@@ -88,15 +89,7 @@ export interface ModelRequest {
  */
 export type StopReason = 'end' | 'tool_use' | 'max_tokens' | 'refusal' | 'other';
 
-export interface Usage {
-  /** All input tokens, cached ones included. */
-  inputTokens: number;
-  outputTokens: number;
-  /** Part of `inputTokens` read from the prompt cache. */
-  cacheReadTokens: number;
-  /** Part of `inputTokens` written to the prompt cache. */
-  cacheWriteTokens: number;
-}
+export type { Usage };
 
 export interface ModelDone {
   type: 'done';

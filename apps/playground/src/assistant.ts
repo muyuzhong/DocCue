@@ -1,9 +1,9 @@
 /**
  * The chat panel. It sits inside `data-cue-ignore`, so the bridge never records typing in it.
- * The debug section shows what the agent gets: the actions waiting to be sent, and the status
- * bar and screen tree from the last question.
+ * The debug section shows what the agent gets: the actions waiting to be sent, and the last
+ * question as the model reads it.
  */
-import type { Bridge } from '@doccue/bridge';
+import type { Bridge, TimelineEntry } from '@doccue/bridge';
 import { escapeHtml } from './app.js';
 
 /** Just enough Markdown for chat answers: code blocks, inline code, bold, lists, paragraphs. */
@@ -30,15 +30,22 @@ function markdown(source: string): string {
     .join('');
 }
 
-export function startAssistant(bridge: Bridge): void {
+/** A recorded action as one line, for the debug panel. */
+function describe(entry: TimelineEntry): string {
+  const time = new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false });
+  const { action, effects = [] } = entry;
+  const what = action ? `${action.type} ${action.target?.role ?? ''} ${JSON.stringify(action.target?.name ?? '')}${action.value === undefined ? '' : ` = ${JSON.stringify(action.value)}`}` : '';
+  const caused = effects.map((effect) => ('text' in effect ? `${effect.type} ${JSON.stringify(effect.text)}` : effect.type)).join(', ');
+  return `${time} ${what}${what && caused ? ' → ' : ''}${caused}`;
+}
+
+export function startAssistant(bridge: Bridge, user: Record<string, unknown>): void {
   const panel = document.querySelector<HTMLElement>('.assistant')!;
   const messages = panel.querySelector<HTMLElement>('.messages')!;
   const textarea = panel.querySelector<HTMLTextAreaElement>('textarea')!;
   const stop = panel.querySelector<HTMLButtonElement>('.stop')!;
   const recorded = panel.querySelector<HTMLElement>('.recorded')!;
-  const status = panel.querySelector<HTMLElement>('.status')!;
-  const screen = panel.querySelector<HTMLElement>('.screen')!;
-  panel.querySelector('.session')!.textContent = `会话 ${bridge.sessionId.slice(0, 8)}`;
+  const context = panel.querySelector<HTMLElement>('.context')!;
 
   const add = (role: 'user' | 'assistant' | 'system', html: string) => {
     const element = document.createElement('div');
@@ -50,47 +57,39 @@ export function startAssistant(bridge: Bridge): void {
   };
 
   let current: { element: HTMLElement; text: string } | undefined;
+  const finish = (meta: string) => {
+    if (!current) return;
+    current.element.classList.add('done');
+    if (!current.text) current.element.innerHTML = '<span class="muted">（没有回答）</span>';
+    current.element.insertAdjacentHTML('beforeend', `<div class="meta">${meta}</div>`);
+    current = undefined;
+    stop.hidden = true;
+  };
 
-  bridge.onOutput((output) => {
-    switch (output.type) {
-      case 'turn_start':
-        current = { element: add('assistant', '<span class="thinking">思考中…</span>'), text: '' };
-        stop.hidden = false;
-        break;
-      case 'status':
-        if (current && !current.text) {
-          current.element.innerHTML = `<span class="thinking">${output.state === 'tool' ? `正在调用 ${escapeHtml(output.tool ?? '工具')}…` : '思考中…'}</span>`;
-        }
-        break;
-      case 'text':
-        if (!current) break;
-        current.text += output.delta;
-        current.element.innerHTML = markdown(current.text);
-        messages.scrollTop = messages.scrollHeight;
-        break;
-      case 'turn_end':
-        if (current) {
-          current.element.classList.add('done');
-          if (!current.text) current.element.innerHTML = '<span class="muted">（没有回答）</span>';
-          const usage = output.usage;
-          const meta = output.reason === 'completed' ? `输入 ${usage.inputTokens} · 输出 ${usage.outputTokens} tokens` : `${output.reason}${output.error ? `：${escapeHtml(output.error.message)}` : ''}`;
-          current.element.insertAdjacentHTML('beforeend', `<div class="meta">${meta}</div>`);
-        }
-        current = undefined;
-        stop.hidden = true;
-        break;
-      case 'error':
-        add('system', escapeHtml(output.message));
-        break;
-      default:
-        break;
+  bridge.on('status', (event) => {
+    if (current && !current.text) {
+      current.element.innerHTML = `<span class="thinking">${event.state === 'tool' ? `正在调用 ${escapeHtml(event.tool ?? '工具')}…` : '思考中…'}</span>`;
     }
   });
+  bridge.on('text', (event) => {
+    if (!current) return;
+    current.text += event.delta;
+    current.element.innerHTML = markdown(current.text);
+    messages.scrollTop = messages.scrollHeight;
+  });
+  bridge.on('end', (event) => {
+    const { inputTokens, outputTokens } = event.usage;
+    finish(event.reason === 'completed' ? `输入 ${inputTokens} · 输出 ${outputTokens} tokens` : `${event.reason}${event.error ? `：${escapeHtml(event.error.message)}` : ''}`);
+  });
 
-  const showDebug = async () => {
-    const body = (await (await fetch(`/doccue/debug?sessionId=${encodeURIComponent(bridge.sessionId)}`)).json()) as { status?: string | null; screen?: string | null };
-    status.textContent = body.status ?? '（空）';
-    screen.textContent = body.screen ?? '（空）';
+  /** Shows the last question as the model reads it (rendered by the playground server). */
+  const showContext = async () => {
+    const response = await fetch('/debug/render', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ conversation: bridge.conversation(), locale: document.documentElement.lang, user }),
+    });
+    context.textContent = ((await response.json()) as { text?: string }).text || '（空）';
   };
 
   panel.querySelector('form')!.addEventListener('submit', async (event) => {
@@ -98,13 +97,19 @@ export function startAssistant(bridge: Bridge): void {
     const question = textarea.value.trim();
     if (!question) return;
     textarea.value = '';
+    finish('已停止');
     add('user', escapeHtml(question));
+    const mine = (current = { element: add('assistant', '<span class="thinking">思考中…</span>'), text: '' });
+    stop.hidden = false;
     try {
-      await bridge.ask(question);
-      await showDebug();
+      const asked = bridge.ask(question);
+      void showContext();
+      await asked;
     } catch (error) {
       add('system', escapeHtml(error instanceof Error ? error.message : String(error)));
     }
+    // No end event arrived for this question: it was stopped or it failed.
+    if (current === mine) finish('已停止');
   });
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -112,13 +117,15 @@ export function startAssistant(bridge: Bridge): void {
       panel.querySelector('form')!.requestSubmit();
     }
   });
-  stop.addEventListener('click', () => void bridge.cancel());
+  stop.addEventListener('click', () => bridge.stop());
+  panel.querySelector('.reset')!.addEventListener('click', () => {
+    bridge.reset();
+    messages.innerHTML = '';
+    context.textContent = '（还没有提问）';
+  });
 
   setInterval(() => {
-    const lines = bridge.recorded().map((entry) => {
-      const time = new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false });
-      return `${time} ${entry.kind} ${entry.target ?? ''}${entry.value !== undefined ? ` = ${JSON.stringify(entry.value)}` : ''}${entry.result ? ` → ${entry.result}` : ''}`;
-    });
+    const lines = bridge.recorded().map(describe);
     recorded.textContent = lines.length > 0 ? lines.join('\n') : '（还没有操作）';
   }, 500);
 }

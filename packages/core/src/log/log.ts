@@ -1,11 +1,12 @@
 /**
- * Logging and replay (cross-cutting). Each model call is recorded with exactly what was sent,
- * what came back, and how long it took, so a bad answer can be inspected and re-sent later.
+ * Logging and replay (cross-cutting). Each request is recorded as received, and each model call
+ * with exactly what was sent, what came back, and how long it took, so a bad answer can be
+ * inspected and re-sent later.
  */
+import type { TurnRequest } from '@doccue/protocol';
 import type { TurnEndReason } from '../loop/types.js';
 import { ModelError } from '../model/errors.js';
 import type { AssistantMessage, Message, ModelAdapter, StopReason, ToolSpec, Usage } from '../model/types.js';
-import type { InputEvent } from '../scheduler/types.js';
 
 export interface LoggedError {
   name: string;
@@ -31,10 +32,9 @@ export interface ModelCallRecord {
 }
 
 export type LogRecord =
-  | { kind: 'event'; at: number; sessionId: string; event: InputEvent }
-  | { kind: 'turn_start'; at: number; sessionId: string; turnId: string; reason: string }
-  | (ModelCallRecord & { sessionId?: string; turnId?: string; step?: number })
-  | { kind: 'turn_end'; at: number; sessionId: string; turnId: string; reason: TurnEndReason; usage: Usage; error?: LoggedError };
+  | { kind: 'request'; at: number; requestId: string; request: TurnRequest }
+  | (ModelCallRecord & { requestId?: string; step?: number })
+  | { kind: 'end'; at: number; requestId: string; reason: TurnEndReason; usage: Usage; error?: LoggedError };
 
 export type Logger = (record: LogRecord) => void;
 

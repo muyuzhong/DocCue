@@ -1,7 +1,7 @@
 /** Finds error messages and notices currently shown on the page. */
-import type { ActiveError } from '@doccue/core';
+import type { Locator } from '@doccue/protocol';
 import { clip, isIgnored, isVisible, textOf } from './dom.js';
-import { CANDIDATE_SELECTOR, accessibleName, describeControl, isInteractive } from './naming.js';
+import { CANDIDATE_SELECTOR, isInteractive, locatorOf } from './naming.js';
 
 /** Where error messages usually live: generic markers plus common UI libraries. */
 export const DEFAULT_ERROR_SELECTORS = [
@@ -13,15 +13,21 @@ export const DEFAULT_ERROR_SELECTORS = [
   '.MuiFormHelperText-root.Mui-error', // MUI
 ];
 
-const NOTICE_SELECTOR = '[role="status"], [aria-live="polite"]';
+export const NOTICE_SELECTOR = '[role="status"], [aria-live="polite"]';
+
+/** An error message visible on the page, with the control it belongs to when that can be told. */
+export interface PageError {
+  text: string;
+  target?: Locator;
+}
 
 /** The control an error message belongs to, if it can be told. */
-function errorTarget(message: Element): string | undefined {
+function errorTarget(message: Element): Locator | undefined {
   const document = message.ownerDocument;
   if (message.id) {
     const id = message.id.replace(/["\\]/g, '\\$&');
     const control = document.querySelector(`[aria-describedby~="${id}"], [aria-errormessage="${id}"]`);
-    if (control) return describeControl(control);
+    if (control) return locatorOf(control);
   }
   // Otherwise the closest container that holds exactly one control.
   let node = message.parentElement;
@@ -29,35 +35,24 @@ function errorTarget(message: Element): string | undefined {
     const controls = Array.from(node.querySelectorAll(CANDIDATE_SELECTOR)).filter(
       (candidate) => candidate !== message && isInteractive(candidate) && isVisible(candidate),
     );
-    if (controls.length === 1 && controls[0]) return describeControl(controls[0]);
+    if (controls.length === 1 && controls[0]) return locatorOf(controls[0]);
     if (controls.length > 1) return undefined;
   }
   return undefined;
 }
 
 /** Visible error messages, each tied to its control when possible. */
-export function collectErrors(document: Document, selectors: readonly string[]): ActiveError[] {
-  const errors: ActiveError[] = [];
+export function collectErrors(document: Document, selectors: readonly string[]): PageError[] {
+  const errors: PageError[] = [];
   const seen = new Set<string>();
-  const add = (error: ActiveError) => {
-    const key = `${error.text}\u0000${error.target ?? ''}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    errors.push(error);
-  };
+  if (selectors.length === 0) return errors;
   for (const element of Array.from(document.querySelectorAll(selectors.join(', ')))) {
     if (isIgnored(element) || !isVisible(element)) continue;
     const text = textOf(element);
-    if (!text) continue;
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
     const target = errorTarget(element);
-    add({ text: clip(text, 200), source: 'page', ...(target ? { target } : {}) });
-  }
-  // Fields marked invalid that have no message of their own.
-  for (const field of Array.from(document.querySelectorAll('[aria-invalid="true"]'))) {
-    if (isIgnored(field) || !isVisible(field)) continue;
-    const target = describeControl(field);
-    if (errors.some((error) => error.target === target)) continue;
-    add({ text: `${accessibleName(field) || '这一项'}填写有误`, target, source: 'page' });
+    errors.push({ text: clip(text, 200), ...(target ? { target } : {}) });
   }
   return errors;
 }

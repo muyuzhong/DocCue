@@ -1,7 +1,9 @@
 /**
- * Finds the control a user interacted with and names it for humans and models, e.g.
- * `按钮「测试连接」`, `弹窗「新建数据源」 › 按钮「保存」`, `「mysql-prod」这一行 › 按钮「删除」`.
+ * Finds the control a user interacted with and describes it the way a screen reader would: an
+ * ARIA role plus the name shown on screen, e.g. `{ role: 'button', name: '测试连接' }`, with the
+ * dialog, table row or section around it when that is needed to tell it apart.
  */
+import type { Locator, Region } from '@doccue/protocol';
 import { clean, clip, isElement, isVisible, textOf } from './dom.js';
 
 const INTERACTIVE_ROLES = new Set([
@@ -23,37 +25,21 @@ const INTERACTIVE_ROLES = new Set([
   'treeitem',
 ]);
 
-const ROLE_LABELS: Record<string, string> = {
-  button: '按钮',
-  link: '链接',
-  checkbox: '复选框',
-  radio: '单选框',
-  switch: '开关',
-  tab: '标签页',
-  menuitem: '菜单项',
-  menuitemcheckbox: '菜单项',
-  menuitemradio: '菜单项',
-  option: '选项',
-  combobox: '下拉框',
-  textbox: '输入框',
-  searchbox: '搜索框',
-  slider: '滑块',
-  spinbutton: '数字框',
-  treeitem: '树节点',
+/** Roles of `<input>` types that are not plain text fields. */
+const INPUT_ROLES: Record<string, string> = {
+  checkbox: 'checkbox',
+  radio: 'radio',
+  button: 'button',
+  submit: 'button',
+  reset: 'button',
+  image: 'button',
+  file: 'button',
+  range: 'slider',
+  number: 'spinbutton',
+  search: 'searchbox',
 };
 
-const INPUT_LABELS: Record<string, string> = {
-  checkbox: '复选框',
-  radio: '单选框',
-  password: '密码框',
-  button: '按钮',
-  submit: '按钮',
-  reset: '按钮',
-  image: '按钮',
-  range: '滑块',
-  file: '文件选择',
-  search: '搜索框',
-};
+const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"], dialog';
 
 /** Selector for anything that might be a control; filter the matches with `isInteractive`. */
 export const CANDIDATE_SELECTOR =
@@ -82,25 +68,24 @@ export function findControl(event: Event): Element | undefined {
   return undefined;
 }
 
-/** `按钮`, `输入框`, `下拉框`, ... */
-export function controlRole(element: Element): string {
+/** The ARIA role: an explicit interactive `role`, or the one the tag implies. */
+export function roleOf(element: Element): string {
   const role = element.getAttribute('role');
-  if (role && ROLE_LABELS[role]) return ROLE_LABELS[role];
+  if (role && INTERACTIVE_ROLES.has(role)) return role;
   switch (element.tagName.toLowerCase()) {
     case 'button':
-      return '按钮';
     case 'summary':
-      return '折叠项';
+      return 'button';
     case 'a':
-      return '链接';
+      return 'link';
     case 'select':
-      return '下拉框';
+      return 'combobox';
     case 'textarea':
-      return '文本框';
+      return 'textbox';
     case 'input':
-      return INPUT_LABELS[(element as HTMLInputElement).type] ?? '输入框';
+      return INPUT_ROLES[(element as HTMLInputElement).type] ?? 'textbox';
     default:
-      return '控件';
+      return element.hasAttribute('contenteditable') ? 'textbox' : 'generic';
   }
 }
 
@@ -148,14 +133,8 @@ export function accessibleName(element: Element): string {
     const inner = image ? clean(image.getAttribute('alt') ?? image.getAttribute('aria-label') ?? image.textContent) : '';
     if (inner) return clip(inner, 40);
   }
-  // Last resorts: an ID the setup Skill added, then the field's technical name.
-  return clean(element.getAttribute('data-cue-id') ?? element.getAttribute('name'));
-}
-
-/** `按钮「保存」`: role and name, without any surrounding context. */
-export function shortName(element: Element): string {
-  const name = accessibleName(element);
-  return name ? `${controlRole(element)}「${name}」` : controlRole(element);
+  // Last resort: the field's technical name.
+  return clean(element.getAttribute('name'));
 }
 
 function headingNear(element: Element): string | undefined {
@@ -177,14 +156,14 @@ export function dialogTitle(dialog: Element): string {
   const labelledBy = dialog.getAttribute('aria-labelledby');
   const byId = labelledBy ? dialog.ownerDocument.getElementById(labelledBy.split(/\s+/)[0] ?? '') : null;
   const heading = byId ?? dialog.querySelector('h1, h2, h3, h4, [role="heading"]');
-  return clip(clean(dialog.getAttribute('aria-label')) || (heading ? textOf(heading) : '') || '未命名', 30);
+  return clip(clean(dialog.getAttribute('aria-label')) || (heading ? textOf(heading) : ''), 30);
 }
 
 function sameName(element: Element, name: string, role: string): number {
   if (!name) return 0;
   let count = 0;
   for (const other of Array.from(element.ownerDocument.querySelectorAll(CANDIDATE_SELECTOR))) {
-    if (isInteractive(other) && controlRole(other) === role && accessibleName(other) === name && isVisible(other)) count++;
+    if (isInteractive(other) && roleOf(other) === role && accessibleName(other) === name && isVisible(other)) count++;
   }
   return count;
 }
@@ -205,20 +184,21 @@ function rowKey(element: Element): string | undefined {
 }
 
 /**
- * The full description used in the timeline: the short name, prefixed with the dialog it is in
- * and, when the same name appears more than once on the page, the row or section it belongs to.
+ * The control as a locator: role and name, the dialog it is in and, when the same name appears
+ * more than once on the page, the row or section it belongs to.
  */
-export function describeControl(element: Element): string {
-  const role = controlRole(element);
+export function locatorOf(element: Element): Locator {
+  const role = roleOf(element);
   const name = accessibleName(element);
-  const parts = [name ? `${role}「${name}」` : role];
+  const within: Region[] = [];
+  const dialog = element.closest(DIALOG_SELECTOR);
+  if (dialog) within.push({ kind: 'dialog', name: dialogTitle(dialog) });
   if (sameName(element, name, role) > 1) {
     const row = rowKey(element);
     const section = row ? undefined : headingNear(element);
-    if (row) parts.unshift(`「${row}」这一行`);
-    else if (section) parts.unshift(`「${section}」区域`);
+    if (row) within.push({ kind: 'row', name: row });
+    else if (section) within.push({ kind: 'section', name: section });
   }
-  const dialog = element.closest('[role="dialog"], [role="alertdialog"], dialog');
-  if (dialog) parts.unshift(`弹窗「${dialogTitle(dialog)}」`);
-  return parts.join(' › ');
+  const id = element.getAttribute('data-cue-id');
+  return { role, name, ...(within.length > 0 ? { within } : {}), ...(id ? { id } : {}) };
 }

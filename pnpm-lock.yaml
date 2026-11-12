@@ -39,15 +39,21 @@ importers:
 
   packages/bridge:
     dependencies:
-      '@doccue/core':
+      '@doccue/protocol':
         specifier: workspace:*
-        version: link:../core
+        version: link:../protocol
     devDependencies:
       happy-dom:
         specifier: ^21.0.4
         version: 21.0.4
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@doccue/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+
+  packages/protocol: {}
 
 packages:
 

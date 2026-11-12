@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { statusContext } from '../src/context/status-context.js';
-import { createMemoryLog, toJsonLine, withModelLog, type LogRecord, type ModelCallRecord } from '../src/log/log.js';
+import { toJsonLine, withModelLog, type LogRecord, type ModelCallRecord } from '../src/log/log.js';
 import { ModelError } from '../src/model/errors.js';
-import { createScheduler } from '../src/scheduler/scheduler.js';
-import { collect, done, fakeModel, reply, toolCall } from './helpers.js';
+import { collect, fakeModel, reply } from './helpers.js';
 
 describe('withModelLog', () => {
   it('records the request, the result and timings', async () => {
@@ -46,47 +44,19 @@ describe('withModelLog', () => {
   });
 });
 
-describe('scheduler logging', () => {
-  it('records events, turns and each model call with session, turn and step', async () => {
-    const { logger, records } = createMemoryLog();
-    const model = fakeModel(
-      () => [done([toolCall('c1', 'noop', {})], 'tool_use')],
-      () => reply('好了'),
-    );
-    const scheduler = createScheduler({
-      model,
-      context: statusContext(),
-      logger,
-      tools: [{ name: 'noop', description: 'noop', parameters: { type: 'object' }, execute: async () => 'ok' }],
-    });
-    await scheduler.push('s', { type: 'perception', page: { path: '/x' } });
-    await scheduler.push('s', { type: 'user_message', content: '试试' });
-    await scheduler.idle('s');
-
-    expect(records.map((r) => r.kind)).toEqual(['event', 'event', 'turn_start', 'model_call', 'model_call', 'turn_end']);
-    const calls = records.filter((r): r is Extract<LogRecord, { kind: 'model_call' }> => r.kind === 'model_call');
-    const turnId = (records[2] as Extract<LogRecord, { kind: 'turn_start' }>).turnId;
-    expect(calls.map((c) => [c.sessionId, c.turnId, c.step])).toEqual([
-      ['s', turnId, 1],
-      ['s', turnId, 2],
-    ]);
-    // The logged request is exactly what the model received.
-    expect(calls[1]!.request.messages).toEqual(model.requests[1]!.messages);
-    expect(records.at(-1)).toMatchObject({ kind: 'turn_end', sessionId: 's', turnId, reason: 'completed' });
-  });
-});
-
 describe('toJsonLine', () => {
   it('replaces image data with its size unless asked to keep it', () => {
     const record: LogRecord = {
-      kind: 'event',
+      kind: 'model_call',
       at: 1,
-      sessionId: 's',
-      event: { type: 'user_message', content: [{ type: 'image', mediaType: 'image/png', data: 'AAAA' }] },
+      provider: 'fake',
+      model: 'fake-1',
+      durationMs: 5,
+      request: { messages: [{ role: 'user', content: [{ type: 'image', mediaType: 'image/png', data: 'AAAA' }] }] },
     };
     expect(toJsonLine(record)).toContain('"data":"[image: 4 base64 chars]"');
     expect(toJsonLine(record, { keepImages: true })).toContain('"data":"AAAA"');
-    expect(JSON.parse(toJsonLine(record))).toMatchObject({ kind: 'event', sessionId: 's' });
+    expect(JSON.parse(toJsonLine(record))).toMatchObject({ kind: 'model_call', model: 'fake-1' });
   });
 });
 

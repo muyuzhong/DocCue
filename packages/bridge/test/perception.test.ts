@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { collectErrors, DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
-import { accessibleName, controlRole, describeControl, findControl } from '../src/naming.js';
+import { accessibleName, findControl, locatorOf, roleOf } from '../src/naming.js';
 import { buildScreen } from '../src/screen.js';
 
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -21,7 +21,7 @@ describe('naming', () => {
       <button id="close" aria-label="关闭"><svg></svg></button>
       <input id="submit" type="submit" value="保存" />
       <div id="custom" role="button" title="更多"></div>
-      <input id="cue" data-cue-id="datasource.timeout" />`;
+      <input id="cue" name="timeout" data-cue-id="datasource.timeout" />`;
     expect(['host', 'kind', 'port', 'pw', 'test', 'close', 'submit', 'custom', 'cue'].map((id) => accessibleName($(`#${id}`)))).toEqual([
       '主机地址',
       '数据库类型',
@@ -31,16 +31,11 @@ describe('naming', () => {
       '关闭',
       '保存',
       '更多',
-      'datasource.timeout',
+      'timeout',
     ]);
-    expect(['host', 'kind', 'pw', 'test', 'submit', 'custom'].map((id) => controlRole($(`#${id}`)))).toEqual([
-      '输入框',
-      '下拉框',
-      '密码框',
-      '按钮',
-      '按钮',
-      '按钮',
-    ]);
+    expect(['host', 'kind', 'pw', 'test', 'submit', 'custom'].map((id) => roleOf($(`#${id}`)))).toEqual(['textbox', 'combobox', 'textbox', 'button', 'button', 'button']);
+    // The host's ID is an identity, not a name: it goes into the locator.
+    expect(locatorOf($('#cue'))).toEqual({ role: 'textbox', name: 'timeout', id: 'datasource.timeout' });
   });
 
   it('adds the dialog, and the row or section when a name is not unique', () => {
@@ -53,10 +48,10 @@ describe('naming', () => {
       <section><h2>高级设置</h2><button class="edit">编辑</button></section>
       <div role="dialog" aria-labelledby="d-title"><h3 id="d-title">删除数据源</h3><button id="ok">确定</button></div>`;
     const [first, second] = Array.from(document.querySelectorAll('.del'));
-    expect(describeControl(first!)).toBe('「mysql-prod」这一行 › 按钮「删除」');
-    expect(describeControl(second!)).toBe('「pg-test」这一行 › 按钮「删除」');
-    expect(describeControl(document.querySelectorAll('.edit')[1]!)).toBe('「高级设置」区域 › 按钮「编辑」');
-    expect(describeControl($('#ok'))).toBe('弹窗「删除数据源」 › 按钮「确定」');
+    expect(locatorOf(first!)).toEqual({ role: 'button', name: '删除', within: [{ kind: 'row', name: 'mysql-prod' }] });
+    expect(locatorOf(second!)).toEqual({ role: 'button', name: '删除', within: [{ kind: 'row', name: 'pg-test' }] });
+    expect(locatorOf(document.querySelectorAll('.edit')[1]!)).toEqual({ role: 'button', name: '编辑', within: [{ kind: 'section', name: '高级设置' }] });
+    expect(locatorOf($('#ok'))).toEqual({ role: 'button', name: '确定', within: [{ kind: 'dialog', name: '删除数据源' }] });
   });
 
   it('finds the control from a click on something inside it', () => {
@@ -81,9 +76,8 @@ describe('errors', () => {
       <p role="alert" style="display:none">hidden error</p>
       <div data-cue-ignore><p role="alert">chat panel error</p></div>`;
     expect(collectErrors(document, DEFAULT_ERROR_SELECTORS)).toEqual([
-      { text: 'Invalid Host Format', target: '输入框「主机地址」', source: 'page' },
-      { text: '不能为空', target: '输入框「名称」', source: 'page' },
-      { text: '端口填写有误', target: '输入框「端口」', source: 'page' },
+      { text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } },
+      { text: '不能为空', target: { role: 'textbox', name: '名称' } },
     ]);
   });
 });
@@ -105,27 +99,39 @@ describe('buildScreen', () => {
       <div role="status">已保存草稿</div>
       <div style="display:none"><button>隐藏按钮</button></div>
       <div data-cue-ignore><button>问答框</button></div>`;
-    expect(buildScreen(document, { errorSelectors: DEFAULT_ERROR_SELECTORS, maxChars: 5000 }).split('\n')).toEqual([
-      expect.stringMatching(/^页面「新建数据源」/),
-      '导航「主菜单」',
-      '  [1] 链接「数据源」',
-      '标题「新建数据源」',
-      '表单「连接信息」',
-      '  [2] 输入框「主机地址」: "http://127.0.0.1:5432" ⚠',
-      '  报错「Invalid Host Format」',
-      '  [3] 密码框「密码」：（已填写）',
-      '  [4] 复选框「使用 SSL」（已勾选）',
-      '  [5] 按钮「测试连接」',
-      '  [6] 按钮「保存」（不可用）',
-      '文字「主机地址只填 IP 或域名。」',
-      '提示「已保存草稿」',
-    ]);
+    const { screen, elements } = buildScreen(document, { errorSelectors: DEFAULT_ERROR_SELECTORS });
+    expect(screen).toEqual({
+      page: { path: expect.any(String), title: '新建数据源' },
+      nodes: [
+        { ref: 1, role: 'navigation', name: '主菜单', children: [{ ref: 2, role: 'link', name: '数据源' }] },
+        { ref: 3, role: 'heading', name: '新建数据源' },
+        {
+          ref: 4,
+          role: 'form',
+          name: '连接信息',
+          children: [
+            { ref: 5, role: 'textbox', name: '主机地址', value: 'http://127.0.0.1:5432', states: ['invalid'] },
+            { role: 'alert', name: 'Invalid Host Format' },
+            { ref: 6, role: 'textbox', name: '密码', states: ['password', 'filled'] },
+            { ref: 7, role: 'checkbox', name: '使用 SSL', states: ['checked'] },
+            { ref: 8, role: 'button', name: '测试连接' },
+            { ref: 9, role: 'button', name: '保存', states: ['disabled'] },
+          ],
+        },
+        { role: 'text', name: '主机地址只填 IP 或域名。' },
+        { role: 'status', name: '已保存草稿' },
+      ],
+    });
+    expect(JSON.stringify(screen)).not.toContain('secret');
+    // Each number leads back to its element.
+    expect(elements.get(5)).toBe($('#host'));
+    expect((elements.get(9) as HTMLButtonElement).textContent).toBe('保存');
   });
 
   it('stops at the size cap and says how much is left', () => {
     document.body.innerHTML = Array.from({ length: 50 }, (_, i) => `<button>按钮${i}</button>`).join('');
-    const screen = buildScreen(document, { errorSelectors: [], maxChars: 200 });
-    expect(screen.length).toBeLessThan(260);
-    expect(screen).toMatch(/…（还有 \d+ 行未显示）$/);
+    const { screen } = buildScreen(document, { errorSelectors: [], maxNodes: 20 });
+    expect(screen.nodes).toHaveLength(20);
+    expect(screen.truncated).toBe(30);
   });
 });

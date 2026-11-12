@@ -1,40 +1,32 @@
-import type { AgentOutput, InputEvent } from '@doccue/core';
+import type { StreamEvent, TurnRequest } from '@doccue/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBridge, type Bridge } from '../src/bridge.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const usage = { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 };
+const answer = (text: string): StreamEvent[] => [
+  { type: 'status', state: 'thinking' },
+  { type: 'text', delta: text },
+  { type: 'end', reason: 'completed', item: { type: 'model', messages: [{ role: 'assistant', content: [{ type: 'text', text }] }] }, usage },
+];
+const sse = (events: StreamEvent[]) =>
+  new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(''), { status: 200, headers: { 'content-type': 'text/event-stream' } });
 
-class FakeEventSource {
-  static last: FakeEventSource | undefined;
-  onopen: (() => void) | null = null;
-  onmessage: ((message: MessageEvent<string>) => void) | null = null;
-  closed = false;
-  constructor(readonly url: string) {
-    FakeEventSource.last = this;
-    setTimeout(() => this.onopen?.(), 0);
-  }
-  emit(output: AgentOutput) {
-    this.onmessage?.({ data: JSON.stringify(output) } as MessageEvent<string>);
-  }
-  close() {
-    this.closed = true;
-  }
-}
-
-let posts: Array<{ url: string; body: { sessionId: string; events: InputEvent[] } }>;
+let posts: Array<{ url: string; body: TurnRequest }>;
+let respond: (init?: RequestInit) => Promise<Response>;
 let bridge: Bridge | undefined;
 const originalFetch = window.fetch;
-const originalEventSource = globalThis.EventSource;
 
 beforeEach(() => {
   posts = [];
+  respond = async () => sse(answer('去掉 http://'));
   sessionStorage.clear();
-  globalThis.EventSource = FakeEventSource as unknown as typeof EventSource;
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    posts.push({ url: String(input), body: JSON.parse(String(init?.body)) });
-    return new Response(null, { status: 204 });
+    posts.push({ url: String(input), body: JSON.parse(String(init?.body)) as TurnRequest });
+    return respond(init);
   };
   document.title = '新建数据源';
+  document.documentElement.lang = 'zh-CN';
   document.body.innerHTML = `
     <label for="host">主机地址</label><input id="host" />
     <button id="test">测试连接</button>
@@ -44,62 +36,77 @@ beforeEach(() => {
 afterEach(() => {
   bridge?.destroy();
   window.fetch = originalFetch;
-  globalThis.EventSource = originalEventSource;
 });
 
+function act() {
+  const host = document.querySelector<HTMLInputElement>('#host')!;
+  host.value = 'http://127.0.0.1:5432';
+  host.dispatchEvent(new Event('change', { bubbles: true }));
+  document.querySelector<HTMLButtonElement>('#test')!.click();
+}
+
 describe('createBridge', () => {
-  it('keeps actions locally and sends them with the question, once', async () => {
-    bridge = createBridge({ endpoint: '/doccue/', user: { attributes: { role: '新手' } }, resultWindowMs: 20 });
-    expect(FakeEventSource.last!.url).toBe(`/doccue/stream?sessionId=${encodeURIComponent(bridge.sessionId)}`);
-    const host = document.querySelector<HTMLInputElement>('#host')!;
-    host.value = 'http://127.0.0.1:5432';
-    host.dispatchEvent(new Event('change', { bubbles: true }));
-    document.querySelector<HTMLButtonElement>('#test')!.click();
+  it('keeps actions locally and sends them once, with the screen and the question', async () => {
+    bridge = createBridge({ endpoint: '/doccue/', user: { role: '新手' }, resultWindowMs: 20 });
+    act();
     expect(posts).toEqual([]); // nothing leaves the browser before a question
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(bridge.recorded().map((entry) => entry.kind)).toEqual(['input', 'click']);
+    await sleep(40);
+    expect(bridge.recorded().map((entry) => entry.action?.type)).toEqual(['input', 'click']);
 
+    const deltas: string[] = [];
+    bridge.on('text', (event) => deltas.push(event.delta));
     await bridge.ask('为什么连不上？');
+    expect(deltas).toEqual(['去掉 http://']);
     expect(posts).toHaveLength(1);
-    expect(posts[0]!.url).toBe('/doccue/events');
-    const { sessionId, events } = posts[0]!.body;
-    expect(sessionId).toBe(bridge.sessionId);
-    expect(events.map((event) => event.type)).toEqual(['user_info', 'perception', 'user_message']);
-    const perception = events[1] as Extract<InputEvent, { type: 'perception' }>;
-    expect(perception.timeline?.map((entry) => [entry.kind, entry.target, entry.value])).toEqual([
-      ['input', '输入框「主机地址」', 'http://127.0.0.1:5432'],
-      ['click', '按钮「测试连接」', undefined],
+    expect(posts[0]!.url).toBe('/doccue/turn');
+    const { v, locale, user, conversation } = posts[0]!.body;
+    expect({ v, locale, user }).toEqual({ v: 1, locale: 'zh-CN', user: { role: '新手' } });
+    expect(conversation).toHaveLength(1);
+    const first = conversation[0] as Extract<TurnRequest['conversation'][number], { type: 'user' }>;
+    expect(first.text).toBe('为什么连不上？');
+    expect(first.perception.actions.map((entry) => entry.action)).toEqual([
+      { type: 'input', target: { role: 'textbox', name: '主机地址' }, value: 'http://127.0.0.1:5432' },
+      { type: 'click', target: { role: 'button', name: '测试连接' } },
     ]);
-    expect(perception.page).toEqual({ path: '/', title: '新建数据源' });
-    expect(perception.screen).toContain('[1] 输入框「主机地址」: "http://127.0.0.1:5432"');
-    expect(perception.screen).not.toContain('question');
-    expect(events[2]).toEqual({ type: 'user_message', content: '为什么连不上？' });
+    expect(first.perception.screen).toEqual({
+      page: { path: '/', title: '新建数据源' },
+      nodes: [
+        { ref: 1, role: 'textbox', name: '主机地址', value: 'http://127.0.0.1:5432' },
+        { ref: 2, role: 'button', name: '测试连接' },
+      ],
+    });
 
-    // A second question without new actions sends no timeline and no user info.
+    // The next request carries the whole conversation; actions already sent are not repeated.
     await bridge.ask('还有别的原因吗？');
-    expect(posts[1]!.body.events.map((event) => event.type)).toEqual(['perception', 'user_message']);
-    expect((posts[1]!.body.events[0] as Extract<InputEvent, { type: 'perception' }>).timeline).toBeUndefined();
+    expect(posts[1]!.body.conversation.map((item) => item.type)).toEqual(['user', 'model', 'user']);
+    expect(posts[1]!.body.conversation[0]).toEqual(first);
+    expect((posts[1]!.body.conversation[2] as typeof first).perception.actions).toEqual([]);
+    expect(bridge.conversation().map((item) => item.type)).toEqual(['user', 'model', 'user', 'model']);
   });
 
-  it('keeps one session per tab and unsent actions across reloads', async () => {
+  it('keeps the conversation and unsent actions across reloads, until reset', async () => {
     const first = createBridge({ endpoint: '/doccue', resultWindowMs: 10 });
+    await first.ask('你好');
     document.querySelector<HTMLButtonElement>('#test')!.click();
     await sleep(30);
     first.destroy();
+
     bridge = createBridge({ endpoint: '/doccue', resultWindowMs: 10 });
-    expect(bridge.sessionId).toBe(first.sessionId);
-    expect(bridge.snapshot().timeline.map((entry) => entry.target)).toEqual(['按钮「测试连接」']);
+    expect(bridge.conversation().map((item) => item.type)).toEqual(['user', 'model']);
+    expect(bridge.perceive().actions.map((entry) => entry.action?.target)).toEqual([{ role: 'button', name: '测试连接' }]);
+    bridge.reset();
+    expect(bridge.conversation()).toEqual([]);
   });
 
-  it('passes outputs to listeners and sends cancel', async () => {
+  it('stops the answer in progress and reports failed requests', async () => {
     bridge = createBridge({ endpoint: '/doccue' });
-    const outputs: AgentOutput[] = [];
-    const off = bridge.onOutput((output) => outputs.push(output));
-    FakeEventSource.last!.emit({ type: 'text', turnId: 't', delta: '你好' });
-    off();
-    FakeEventSource.last!.emit({ type: 'text', turnId: 't', delta: '没人听' });
-    expect(outputs).toEqual([{ type: 'text', turnId: 't', delta: '你好' }]);
-    await bridge.cancel();
-    expect(posts.at(-1)!.body.events).toEqual([{ type: 'cancel' }]);
+    respond = (init) => new Promise((_, reject) => init!.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    const pending = bridge.ask('你好');
+    await sleep(10);
+    bridge.stop();
+    await expect(pending).resolves.toBeUndefined();
+
+    respond = async () => new Response(JSON.stringify({ errors: ['v: expected 1'] }), { status: 400 });
+    await expect(bridge.ask('再问一次')).rejects.toThrow('DocCue 400: v: expected 1');
   });
 });

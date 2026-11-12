@@ -22,7 +22,7 @@ const calls = readFileSync(file, 'utf8')
   .split('\n')
   .filter((line) => line.trim())
   .map((line) => JSON.parse(line) as LogRecord)
-  .filter((record): record is ModelCallRecord & { turnId?: string; step?: number } => record.kind === 'model_call');
+  .filter((record): record is ModelCallRecord & { requestId?: string; step?: number } => record.kind === 'model_call');
 
 const textOf = (message: AssistantMessage | undefined) =>
   message?.content.map((part) => (part.type === 'text' ? part.text : part.type === 'tool_call' ? `[调用 ${part.name} ${part.rawArgs}]` : '')).join('') ?? '';

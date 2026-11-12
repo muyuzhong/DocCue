@@ -1,17 +1,13 @@
 /**
- * The screen tree: a compact text outline of what is visible, for the model. Headings, groups
- * (dialogs, forms, tables), every control with its current value and state, error messages,
- * notices and short visible text. Controls are numbered so later actions can point at them.
- *
- *   页面「新建数据源」 /datasource/new
- *   标题「新建数据源」
- *   表单「连接信息」
- *     [1] 输入框「主机地址」: "http://127.0.0.1:5432" ⚠
- *     报错「Invalid Host Format」
- *     [2] 按钮「测试连接」
+ * The screen snapshot: what is visible, as a tree. Headings, groups (dialogs, forms, tables),
+ * every control with its current value and state, error messages, notices and short visible
+ * text. Controls, headings and groups get a number (`ref`) the model can point at; `elements`
+ * maps each number back to its element.
  */
+import type { Screen, ScreenNode } from '@doccue/protocol';
 import { clean, clip, isIgnored, isVisible, textOf } from './dom.js';
-import { accessibleName, controlRole, dialogTitle, isInteractive } from './naming.js';
+import { NOTICE_SELECTOR } from './errors.js';
+import { accessibleName, dialogTitle, isInteractive, roleOf } from './naming.js';
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'META', 'LINK', 'OPTION']);
 const TEXT_TAGS = new Set(['P', 'LI', 'TD', 'TH', 'SPAN', 'DIV', 'DD', 'DT', 'SMALL', 'STRONG', 'EM', 'B', 'CAPTION', 'FIGCAPTION', 'BLOCKQUOTE', 'PRE', 'CODE']);
@@ -19,54 +15,63 @@ const TEXT_FIELD_TYPES = new Set(['text', 'email', 'number', 'search', 'tel', 'u
 
 export interface ScreenOptions {
   errorSelectors: readonly string[];
-  /** Cut the outline at this many characters. */
-  maxChars: number;
-  /** Stop walking after this many elements, to stay cheap on huge pages. */
-  maxElements?: number;
+  /** Nodes kept in the snapshot; the rest are counted in `truncated`. Defaults to 300. */
+  maxNodes?: number;
 }
 
-function controlLine(element: Element, index: number): string {
+export interface Snapshot {
+  screen: Screen;
+  /** The element behind each `ref`. */
+  elements: Map<number, Element>;
+}
+
+function controlNode(element: Element): ScreenNode {
+  const node: ScreenNode = { role: roleOf(element) };
   const name = accessibleName(element);
-  let line = `[${index}] ${controlRole(element)}${name ? `「${name}」` : ''}`;
+  if (name) node.name = name;
+  const states: string[] = [];
   const tag = element.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') {
     const field = element as HTMLInputElement;
-    if (field.type === 'checkbox' || field.type === 'radio') line += field.checked ? '（已勾选）' : '（未勾选）';
-    else if (field.type === 'password') line += field.value ? '：（已填写）' : '：（空）';
-    else if (field.type === 'file') line += field.files?.length ? `：（已选 ${field.files.length} 个文件）` : '：（未选择）';
-    else if (TEXT_FIELD_TYPES.has(field.type) || tag === 'TEXTAREA') line += field.value ? `: ${JSON.stringify(clip(field.value, 60))}` : '：（空）';
+    if (field.type === 'checkbox' || field.type === 'radio') {
+      if (field.checked) states.push('checked');
+    } else if (field.type === 'password') {
+      states.push('password');
+      if (field.value) states.push('filled');
+    } else if (TEXT_FIELD_TYPES.has(field.type) || tag === 'TEXTAREA') {
+      node.value = clip(field.value, 100);
+    }
   } else if (tag === 'SELECT') {
-    const select = element as HTMLSelectElement;
-    const chosen = Array.from(select.selectedOptions ?? []).map((option) => clean(option.textContent)).filter(Boolean);
-    line += chosen.length > 0 ? `: ${JSON.stringify(clip(chosen.join('、'), 60))}` : '：（未选择）';
-  } else if (element.getAttribute('role') === 'checkbox' || element.getAttribute('role') === 'switch') {
-    line += element.getAttribute('aria-checked') === 'true' ? '（已打开）' : '（已关闭）';
+    const chosen = Array.from((element as HTMLSelectElement).selectedOptions ?? []).map((option) => clean(option.textContent));
+    node.value = clip(chosen.filter(Boolean).join(', '), 100);
+  } else if (element.getAttribute('aria-checked') === 'true') {
+    states.push('checked');
   }
-  const states: string[] = [];
-  if ((element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true') states.push('不可用');
-  if (element.getAttribute('aria-selected') === 'true' || element.hasAttribute('aria-current')) states.push('当前');
+  if ((element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true') states.push('disabled');
+  if (element.getAttribute('aria-selected') === 'true' || element.hasAttribute('aria-current')) states.push('current');
   const expanded = element.getAttribute('aria-expanded');
-  if (expanded) states.push(expanded === 'true' ? '已展开' : '已收起');
-  if (states.length > 0) line += `（${states.join('，')}）`;
-  if (element.getAttribute('aria-invalid') === 'true') line += ' ⚠';
-  return line;
+  if (expanded) states.push(expanded === 'true' ? 'expanded' : 'collapsed');
+  if (element.getAttribute('aria-invalid') === 'true') states.push('invalid');
+  if (states.length > 0) node.states = states;
+  return node;
 }
 
-function groupLine(element: Element): string | undefined {
+function groupNode(element: Element): ScreenNode | undefined {
   const tag = element.tagName;
   const role = element.getAttribute('role');
   const label = clean(element.getAttribute('aria-label'));
-  if (role === 'dialog' || role === 'alertdialog' || tag === 'DIALOG') return `弹窗「${dialogTitle(element)}」`;
-  if (tag === 'FORM') return label ? `表单「${label}」` : '表单';
+  const named = (groupRole: string, name: string): ScreenNode => ({ role: groupRole, ...(name ? { name } : {}) });
+  if (role === 'dialog' || role === 'alertdialog' || tag === 'DIALOG') return named('dialog', dialogTitle(element));
+  if (tag === 'FORM') return named('form', label);
   if (tag === 'FIELDSET') {
     const legend = element.querySelector('legend');
-    return `分组「${legend ? textOf(legend) : label || '未命名'}」`;
+    return named('group', legend ? textOf(legend) : label);
   }
-  if (tag === 'NAV' || role === 'navigation') return label ? `导航「${label}」` : '导航';
-  if (tag === 'TABLE' || role === 'table' || role === 'grid') return label ? `表格「${label}」` : '表格';
-  if (tag === 'TR' || role === 'row') return '行';
-  if (role === 'tablist') return '标签页组';
-  if (role === 'menu' || role === 'menubar') return '菜单';
+  if (tag === 'NAV' || role === 'navigation') return named('navigation', label);
+  if (tag === 'TABLE' || role === 'table' || role === 'grid') return named('table', label);
+  if (tag === 'TR' || role === 'row') return named('row', '');
+  if (role === 'tablist') return named('tablist', label);
+  if (role === 'menu' || role === 'menubar') return named('menu', label);
   return undefined;
 }
 
@@ -79,62 +84,73 @@ function ownText(element: Element): string {
   return clean(text);
 }
 
-export function buildScreen(document: Document, options: ScreenOptions): string {
-  const lines: string[] = [`页面「${clip(clean(document.title) || '未命名', 40)}」 ${document.location?.pathname ?? ''}`.trim()];
+export function buildScreen(document: Document, options: ScreenOptions): Snapshot {
   const errorSelector = options.errorSelectors.join(', ');
-  const maxElements = options.maxElements ?? 5000;
-  let visited = 0;
-  let controls = 0;
-  let size = lines[0]!.length;
-  let cut = 0;
+  const maxNodes = options.maxNodes ?? 300;
+  const elements = new Map<number, Element>();
+  const nodes: ScreenNode[] = [];
+  let count = 0;
+  let truncated = 0;
 
-  const push = (depth: number, text: string) => {
-    const line = `${'  '.repeat(depth)}${text}`;
-    if (size + line.length + 1 > options.maxChars) {
-      cut++;
-      return;
+  /** Adds a node to `out`; with `element`, the node gets a number. */
+  const add = (out: ScreenNode[], node: ScreenNode, element?: Element): ScreenNode | undefined => {
+    if (count >= maxNodes) {
+      truncated++;
+      return undefined;
     }
-    lines.push(line);
-    size += line.length + 1;
+    count++;
+    const numbered = element ? { ref: elements.size + 1, ...node } : node;
+    if (element) elements.set(elements.size + 1, element);
+    out.push(numbered);
+    return numbered;
   };
 
   // Inside a <label> the text is the control's name, so only the control itself is listed.
-  const walk = (element: Element, depth: number, inLabel = false) => {
-    if (++visited > maxElements) return;
-    if (SKIP_TAGS.has(element.tagName.toUpperCase()) || isIgnored(element) || !isVisible(element)) return;
+  const walk = (element: Element, out: ScreenNode[], inLabel = false) => {
+    const tag = element.tagName.toUpperCase();
+    if (SKIP_TAGS.has(tag) || isIgnored(element) || !isVisible(element)) return;
 
-    if (/^H[1-6]$/i.test(element.tagName) || element.getAttribute('role') === 'heading') {
+    if (/^H[1-6]$/.test(tag) || element.getAttribute('role') === 'heading') {
       const text = textOf(element);
-      if (text) push(depth, `标题「${clip(text, 60)}」`);
+      if (text) add(out, { role: 'heading', name: clip(text, 80) }, element);
       return;
     }
     if (isInteractive(element)) {
-      push(depth, controlLine(element, ++controls));
+      add(out, controlNode(element), element);
       return;
     }
     if (errorSelector && element.matches(errorSelector)) {
       const text = textOf(element);
-      if (text) push(depth, `报错「${clip(text, 100)}」`);
+      if (text) add(out, { role: 'alert', name: clip(text, 200) });
       return;
     }
-    if (element.matches('[role="status"], [aria-live="polite"]')) {
+    if (element.matches(NOTICE_SELECTOR)) {
       const text = textOf(element);
-      if (text) push(depth, `提示「${clip(text, 100)}」`);
+      if (text) add(out, { role: 'status', name: clip(text, 200) });
       return;
     }
 
-    const group = groupLine(element);
-    if (group) push(depth, group);
-    const childDepth = group ? depth + 1 : depth;
-    const quiet = inLabel || element.tagName.toUpperCase() === 'LABEL';
-    if (!quiet && TEXT_TAGS.has(element.tagName.toUpperCase())) {
+    const group = groupNode(element);
+    const added = group ? add(out, group, element) : undefined;
+    const children: ScreenNode[] = [];
+    const childOut = added ? children : out;
+    const quiet = inLabel || tag === 'LABEL';
+    if (!quiet && TEXT_TAGS.has(tag)) {
       const text = ownText(element);
-      if (text) push(childDepth, `文字「${clip(text, 80)}」`);
+      if (text) add(childOut, { role: 'text', name: clip(text, 120) });
     }
-    for (const child of Array.from(element.children)) walk(child, childDepth, quiet);
+    for (const child of Array.from(element.children)) walk(child, childOut, quiet);
+    if (added && children.length > 0) added.children = children;
   };
 
-  if (document.body) for (const child of Array.from(document.body.children)) walk(child, 0);
-  if (cut > 0) lines.push(`…（还有 ${cut} 行未显示）`);
-  return lines.join('\n');
+  if (document.body) for (const child of Array.from(document.body.children)) walk(child, nodes);
+  const title = clean(document.title);
+  return {
+    screen: {
+      page: { path: `${document.location?.pathname ?? ''}${document.location?.hash ?? ''}`, ...(title ? { title } : {}) },
+      nodes,
+      ...(truncated > 0 ? { truncated } : {}),
+    },
+    elements,
+  };
 }

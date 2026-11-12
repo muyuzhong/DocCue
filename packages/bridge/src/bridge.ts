@@ -1,31 +1,28 @@
 /**
- * The bridge: drop it into a page and it records what the user does. Following the design, the
- * record stays in the browser until the user asks something; then it goes up in one request
- * together with the screen tree, the visible errors and the question.
+ * The bridge: drop it into a page and it records what the user does. The record stays in the
+ * browser until the user asks something; then it goes up with the screen snapshot and the
+ * question.
+ *
+ * The bridge also keeps the conversation (in sessionStorage, one per tab) and sends it in full
+ * with every request: the backend keeps nothing between requests.
  */
-import type { ActiveError, AgentOutput, InputEvent, PageInfo, TimelineEntry } from '@doccue/core';
-import { createClient, type Client } from './client.js';
-import { DEFAULT_ERROR_SELECTORS, collectErrors } from './errors.js';
+import { PROTOCOL_VERSION, type Item, type Perception, type StreamEvent, type TimelineEntry, type TurnRequest } from '@doccue/protocol';
+import { DEFAULT_ERROR_SELECTORS } from './errors.js';
 import { createRecorder } from './recorder.js';
 import { buildScreen } from './screen.js';
-
-export interface BridgeUser {
-  attributes?: Record<string, unknown>;
-  completedTours?: string[];
-}
 
 export interface BridgeOptions {
   /** Where the DocCue handler is mounted, e.g. `/doccue`. */
   endpoint: string;
-  /** Defaults to one ID per browser tab (kept in sessionStorage). */
-  sessionId?: string;
-  /** Sent with the next question. */
-  user?: BridgeUser;
+  /** The user's language, e.g. `zh-CN`. Defaults to the page's `lang`, then the browser's. */
+  locale?: string;
+  /** What the host app knows about the user, e.g. role or plan. */
+  user?: Record<string, unknown>;
   /** Extra selectors for error messages, e.g. your UI library's (common ones are built in). */
   errorSelectors?: string[];
-  /** Screen tree size cap in characters. Defaults to 8000. */
-  screenMaxChars?: number;
-  /** How long after an action its effects count as its result. Defaults to 1000 ms. */
+  /** Size cap of the screen snapshot, in nodes. Defaults to 300. */
+  maxNodes?: number;
+  /** How long after an action its effects count as caused by it. Defaults to 1000 ms. */
   resultWindowMs?: number;
   /** Report failed fetch / XHR requests. Defaults to true. */
   captureNetwork?: boolean;
@@ -34,33 +31,28 @@ export interface BridgeOptions {
   document?: Document;
 }
 
-export interface PerceptionSnapshot {
-  page: PageInfo;
-  timeline: TimelineEntry[];
-  screen: string;
-  errors: ActiveError[];
-}
+type Listener<T extends StreamEvent['type']> = (event: Extract<StreamEvent, { type: T }>) => void;
 
 export interface Bridge {
-  readonly sessionId: string;
-  /** Sends the question along with everything recorded since the last one. */
+  /** Sends the question with everything recorded since the last one. Resolves when the answer ends. */
   ask(question: string): Promise<void>;
   /** Stops the answer in progress. */
-  cancel(): Promise<void>;
-  setUser(user: BridgeUser): void;
-  onOutput(listener: (output: AgentOutput) => void): () => void;
+  stop(): void;
+  /** Starts a new conversation. */
+  reset(): void;
+  /** Listens to one kind of event of the answer. Returns the unsubscribe function. */
+  on<T extends StreamEvent['type']>(type: T, listener: Listener<T>): () => void;
   /** Actions recorded locally and not sent yet. */
   recorded(): TimelineEntry[];
-  /** What the next question would send (for debugging). */
-  snapshot(): PerceptionSnapshot;
+  /** What the next question would send. */
+  perceive(): Perception;
+  /** The conversation so far, as sent with every request. */
+  conversation(): Item[];
   destroy(): void;
 }
 
-function newSessionId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-}
+const CONVERSATION_KEY = 'doccue:conversation';
+const UNSENT_KEY = 'doccue:unsent';
 
 function sessionStore(): Storage | undefined {
   try {
@@ -70,34 +62,57 @@ function sessionStore(): Storage | undefined {
   }
 }
 
+/** Reads the server-sent events of a response body, one JSON object per event. */
+async function* readEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buffer += decoder.decode(value, { stream: true });
+    const messages = buffer.split('\n\n');
+    buffer = messages.pop() ?? '';
+    for (const message of messages) {
+      const data = message
+        .split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n');
+      if (data) yield JSON.parse(data) as StreamEvent;
+    }
+  }
+}
+
 export function createBridge(options: BridgeOptions): Bridge {
   const document = options.document ?? globalThis.document;
   const storage = sessionStore();
   const endpoint = options.endpoint.replace(/\/+$/, '');
   const errorSelectors = [...DEFAULT_ERROR_SELECTORS, ...(options.errorSelectors ?? [])];
   const timelineLimit = options.timelineLimit ?? 100;
+  const locale = options.locale ?? (document.documentElement.lang || globalThis.navigator?.language);
 
-  const sessionId = options.sessionId ?? storage?.getItem('doccue:session') ?? newSessionId();
-  storage?.setItem('doccue:session', sessionId);
-  const unsentKey = `doccue:unsent:${sessionId}`;
-
-  // Actions not sent yet; kept in sessionStorage so a page reload doesn't lose them.
-  let unsent: TimelineEntry[] = [];
-  try {
-    unsent = JSON.parse(storage?.getItem(unsentKey) ?? '[]') as TimelineEntry[];
-  } catch {
-    unsent = [];
-  }
-  const save = () => {
+  const load = <T>(key: string): T[] => {
     try {
-      storage?.setItem(unsentKey, JSON.stringify(unsent));
+      return JSON.parse(storage?.getItem(key) ?? '[]') as T[];
     } catch {
-      // Storage full or blocked: keep them in memory only.
+      return [];
+    }
+  };
+  const save = (key: string, value: unknown) => {
+    try {
+      storage?.setItem(key, JSON.stringify(value));
+    } catch {
+      // Storage full or blocked: keep it in memory only.
     }
   };
 
-  let user = options.user;
-  const client: Client = createClient({ endpoint, sessionId });
+  // Both survive a page reload.
+  let items = load<Item>(CONVERSATION_KEY);
+  let unsent = load<TimelineEntry>(UNSENT_KEY);
+  let running: AbortController | undefined;
+  const listeners = new Map<string, Set<(event: StreamEvent) => void>>();
+
   const recorder = createRecorder({
     document,
     errorSelectors,
@@ -112,43 +127,83 @@ export function createBridge(options: BridgeOptions): Bridge {
     },
     onEntry: (entry) => {
       unsent = [...unsent, entry].slice(-timelineLimit);
-      save();
+      save(UNSENT_KEY, unsent);
     },
-    onPage: () => {},
   });
 
-  const snapshot = (): PerceptionSnapshot => ({
-    page: recorder.page(),
-    timeline: [...unsent],
-    screen: buildScreen(document, { errorSelectors, maxChars: options.screenMaxChars ?? 8000 }),
-    errors: collectErrors(document, errorSelectors),
+  const perceive = (): Perception => ({
+    at: Date.now(),
+    screen: buildScreen(document, { errorSelectors, ...(options.maxNodes === undefined ? {} : { maxNodes: options.maxNodes }) }).screen,
+    actions: [...unsent],
   });
+
+  const emit = (event: StreamEvent) => {
+    for (const listener of [...(listeners.get(event.type) ?? [])]) listener(event);
+  };
 
   return {
-    sessionId,
     async ask(question) {
+      // A new question replaces the answer in progress.
+      running?.abort();
+      const controller = (running = new AbortController());
       recorder.flush();
-      const { page, timeline, screen, errors } = snapshot();
-      const events: InputEvent[] = [];
-      if (user) events.push({ type: 'user_info', ...user });
-      events.push({ type: 'perception', page, screen, errors, ...(timeline.length > 0 ? { timeline } : {}) });
-      events.push({ type: 'user_message', content: question });
-      await client.post(events);
-      // Sent: drop what went up (actions recorded while posting stay for next time).
-      unsent = unsent.slice(timeline.length);
-      save();
-      user = undefined;
+      items.push({ type: 'user', text: question, perception: perceive() });
+      unsent = [];
+      save(CONVERSATION_KEY, items);
+      save(UNSENT_KEY, unsent);
+
+      const request: TurnRequest = {
+        v: PROTOCOL_VERSION,
+        conversation: items,
+        ...(locale ? { locale } : {}),
+        ...(options.user ? { user: options.user } : {}),
+      };
+      try {
+        const response = await fetch(`${endpoint}/turn`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(request),
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          const body = (await response.json().catch(() => ({}))) as { errors?: string[] };
+          throw new Error(`DocCue ${response.status}: ${(body.errors ?? []).join('; ') || response.statusText}`);
+        }
+        for await (const event of readEvents(response.body)) {
+          if (event.type === 'end' && event.item.type === 'model' && event.item.messages.length > 0) {
+            items.push(event.item);
+            save(CONVERSATION_KEY, items);
+          }
+          emit(event);
+        }
+      } catch (error) {
+        // Stopped on purpose: nothing to report.
+        if (!controller.signal.aborted) throw error;
+      } finally {
+        if (running === controller) running = undefined;
+      }
     },
-    cancel: () => client.post([{ type: 'cancel' }]),
-    setUser(next) {
-      user = next;
+    stop() {
+      running?.abort();
     },
-    onOutput: (listener) => client.subscribe(listener),
+    reset() {
+      running?.abort();
+      items = [];
+      save(CONVERSATION_KEY, items);
+    },
+    on(type, listener) {
+      const set = listeners.get(type) ?? new Set();
+      listeners.set(type, set);
+      set.add(listener as (event: StreamEvent) => void);
+      return () => set.delete(listener as (event: StreamEvent) => void);
+    },
     recorded: () => [...unsent],
-    snapshot,
+    perceive,
+    conversation: () => [...items],
     destroy() {
+      running?.abort();
       recorder.stop();
-      client.close();
+      listeners.clear();
     },
   };
 }

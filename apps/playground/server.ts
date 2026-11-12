@@ -4,14 +4,14 @@
  *
  *   pnpm playground        → http://localhost:5173
  *
- * The model comes from the repository's root .env (see .env.example). Every event, turn and
- * model call is logged to apps/playground/.logs/ (replay one with `pnpm replay`).
+ * The model comes from the repository's root .env (see .env.example). Every request and model
+ * call is logged to apps/playground/.logs/ (replay one with `pnpm replay`).
  */
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHandler, createModelFromEnv, createScheduler, statusContext, toJsonLine, withRetry } from '@doccue/core';
+import { createHandler, createModelFromEnv, renderLastUserMessage, toJsonLine, withRetry, type TurnRequest } from '@doccue/core';
 import { toNodeHandler } from '@doccue/core/node';
 import { createServer as createViteServer, defaultClientConditions } from 'vite';
 
@@ -20,7 +20,7 @@ const ENV_FILE = new URL('../../.env', import.meta.url);
 
 const INSTRUCTIONS = `你是「数据平台」的应用内助手。数据平台用来接入和管理数据库数据源：在「数据源」页面查看和删除数据源，在「新建数据源」页面填写名称、数据库类型、主机地址、端口、用户名和密码，先点「测试连接」，连接成功后才能「保存」。
 各数据库的默认端口：MySQL 3306，PostgreSQL 5432，ClickHouse 8123。
-用户遇到问题时，结合状态栏里的页面、操作和报错，直接说明原因和下一步该怎么做，简短具体。`;
+用户遇到问题时，结合他的操作、报错和当前界面，直接说明原因和下一步该怎么做，简短具体。`;
 
 // --- mock backend -------------------------------------------------------------------------------
 
@@ -96,12 +96,18 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
   mkdirSync(logDir, { recursive: true });
   const logFile = new URL(`playground-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.jsonl`, logDir);
 
-  const scheduler = createScheduler({
-    model: withRetry(model),
-    context: statusContext({ instructions: INSTRUCTIONS }),
-    logger: (record) => appendFileSync(logFile, `${toJsonLine(record)}\n`),
-  });
-  const doccue = toNodeHandler(createHandler({ scheduler, basePath: '/doccue', debug: true }));
+  const doccue = toNodeHandler(
+    createHandler({
+      model: withRetry(model),
+      instructions: INSTRUCTIONS,
+      basePath: '/doccue',
+      logger: (record) => appendFileSync(logFile, `${toJsonLine(record)}\n`),
+    }),
+  );
+  // For the "what the agent sees" panel: the last question as the model reads it.
+  const debug = async (req: IncomingMessage, res: ServerResponse) => {
+    send(res, 200, { text: renderLastUserMessage((await readJson(req)) as unknown as TurnRequest) ?? '' });
+  };
 
   const vite = await createViteServer({
     root: APP_DIR,
@@ -116,6 +122,7 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
   const server = createServer((req, res) => {
     const url = req.url ?? '/';
     if (url.startsWith('/doccue/')) void doccue(req, res);
+    else if (url === '/debug/render') void debug(req, res).catch((error: unknown) => send(res, 500, { message: String(error) }));
     else if (url.startsWith('/api/')) void api(req, res).catch((error: unknown) => send(res, 500, { message: String(error) }));
     else vite.middlewares(req, res);
   });

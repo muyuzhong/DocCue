@@ -1,4 +1,4 @@
-import type { PageInfo, TimelineEntry } from '@doccue/core';
+import type { TimelineEntry } from '@doccue/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
 import { createRecorder, type Recorder } from '../src/recorder.js';
@@ -8,12 +8,10 @@ const $ = <T extends Element = HTMLElement>(selector: string) => document.queryS
 
 let recorder: Recorder | undefined;
 let entries: TimelineEntry[];
-let pages: PageInfo[];
 const originalFetch = window.fetch;
 
 function start(windowMs = 60) {
   entries = [];
-  pages = [];
   recorder = createRecorder({
     document,
     errorSelectors: DEFAULT_ERROR_SELECTORS,
@@ -21,7 +19,6 @@ function start(windowMs = 60) {
     captureNetwork: true,
     skipUrl: (url) => url.includes('/doccue/'),
     onEntry: (entry) => entries.push(entry),
-    onPage: (page) => pages.push(page),
   });
 }
 
@@ -57,7 +54,11 @@ describe('createRecorder', () => {
     $('#test').click();
     await sleep(120);
     expect(entries).toEqual([
-      { at: expect.any(Number), page: '/', kind: 'click', target: '按钮「测试连接」', result: '出现报错「Invalid Host Format」（输入框「主机地址」）' },
+      {
+        at: expect.any(Number),
+        action: { type: 'click', target: { role: 'button', name: '测试连接' } },
+        effects: [{ type: 'error', text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } }],
+      },
     ]);
   });
 
@@ -78,16 +79,16 @@ describe('createRecorder', () => {
     // Clicking into a field is not an action of its own.
     host.click();
     await sleep(50);
-    expect(entries.map(({ kind, target, value }) => ({ kind, target, value }))).toEqual([
-      { kind: 'input', target: '输入框「主机地址」', value: 'http://127.0.0.1:5432' },
-      { kind: 'input', target: '密码框「密码」', value: undefined },
-      { kind: 'select', target: '下拉框「类型」', value: 'PostgreSQL' },
-      { kind: 'check', target: '复选框「使用 SSL」', value: undefined },
+    expect(entries.map((entry) => entry.action)).toEqual([
+      { type: 'input', target: { role: 'textbox', name: '主机地址' }, value: 'http://127.0.0.1:5432' },
+      { type: 'input', target: { role: 'textbox', name: '密码' } },
+      { type: 'select', target: { role: 'combobox', name: '类型' }, value: 'PostgreSQL' },
+      { type: 'check', target: { role: 'checkbox', name: '使用 SSL' } },
     ]);
     expect(JSON.stringify(entries)).not.toContain('secret');
   });
 
-  it('notes page changes, as the result of a click or on their own', async () => {
+  it('notes page changes, as the effect of a click or on their own', async () => {
     start();
     $('#list').addEventListener('click', (event) => {
       event.preventDefault();
@@ -99,11 +100,10 @@ describe('createRecorder', () => {
     history.pushState({}, '', '/dashboard');
     document.title = '仪表盘';
     await sleep(100);
-    expect(entries.map(({ kind, target, result }) => ({ kind, target, result }))).toEqual([
-      { kind: 'click', target: '链接「数据源列表」', result: '进入页面「数据源列表」' },
-      { kind: 'navigate', target: '仪表盘', result: undefined },
+    expect(entries.map(({ action, effects }) => ({ action, effects }))).toEqual([
+      { action: { type: 'click', target: { role: 'link', name: '数据源列表' } }, effects: [{ type: 'navigate', page: { path: '/datasource', title: '数据源列表' } }] },
+      { action: undefined, effects: [{ type: 'navigate', page: { path: '/dashboard', title: '仪表盘' } }] },
     ]);
-    expect(pages.map((page) => page.path)).toEqual(['/datasource', '/dashboard']);
   });
 
   it('keeps a page change with the click that caused it, even when the next action is quick', async () => {
@@ -118,12 +118,11 @@ describe('createRecorder', () => {
     host.value = '127.0.0.1';
     change(host);
     await sleep(150);
-    // The title wasn't set yet when the click's record closed, so the path stands in for it.
-    expect(entries.map(({ kind, result }) => ({ kind, result }))).toEqual([
-      { kind: 'click', result: '进入页面「/datasource」' },
-      { kind: 'input', result: undefined },
+    // The title wasn't set yet when the click's record closed, so only the path is known.
+    expect(entries.map(({ action, effects }) => ({ type: action?.type, effects }))).toEqual([
+      { type: 'click', effects: [{ type: 'navigate', page: { path: '/datasource' } }] },
+      { type: 'input', effects: undefined },
     ]);
-    expect(entries[1]!.page).toBe('/datasource');
   });
 
   it('reports failed requests with the server message, but not the bridge’s own', async () => {
@@ -134,12 +133,12 @@ describe('createRecorder', () => {
     start();
     $('#test').addEventListener('click', () => {
       void fetch('/api/test-connection', { method: 'POST' });
-      void fetch('/doccue/events', { method: 'POST' });
+      void fetch('/doccue/turn', { method: 'POST' });
     });
     $('#test').click();
     await sleep(120);
-    expect(entries).toEqual([
-      expect.objectContaining({ kind: 'click', result: '接口 POST /api/test-connection 返回 500：connection refused' }),
+    expect(entries.map((entry) => entry.effects)).toEqual([
+      [{ type: 'request_failed', method: 'POST', path: '/api/test-connection', status: 500, message: 'connection refused' }],
     ]);
   });
 
@@ -150,6 +149,6 @@ describe('createRecorder', () => {
     $('#test').click();
     expect(entries).toEqual([]);
     recorder!.flush();
-    expect(entries).toEqual([expect.objectContaining({ kind: 'click', target: '按钮「测试连接」' })]);
+    expect(entries.map((entry) => entry.action)).toEqual([{ type: 'click', target: { role: 'button', name: '测试连接' } }]);
   });
 });

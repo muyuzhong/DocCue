@@ -295,9 +295,13 @@ th {
   align-items: center;
 }
 
-.assistant .session {
+.assistant .reset {
   color: var(--muted);
   font-size: 12px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
 }
 
 .messages {

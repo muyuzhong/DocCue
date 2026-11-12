@@ -30,7 +30,7 @@ async function ask(page: Page, question: string): Promise<void> {
   await page.locator('.assistant textarea').press('Enter');
   const started = Date.now();
   await page.locator('.message.assistant.done').nth(before).waitFor({ timeout: 240_000 });
-  console.log(`\n状态栏（agent 看到的）：\n${await page.locator('.status').innerText()}`);
+  console.log(`\n模型看到的现场信息：\n${await page.locator('.context').innerText()}`);
   console.log(`\n回答（${Math.round((Date.now() - started) / 1000)} 秒）：\n${await page.locator('.message.assistant.done').nth(before).innerText()}`);
 }
 
@@ -43,7 +43,6 @@ try {
   await page.waitForTimeout(1500);
   await page.screenshot({ path: `${shots}/1-host-error.png` });
   await ask(page, '为什么连不上？');
-  console.log(`\n界面树（上一次提问时）：\n${await page.locator('.screen').innerText()}`);
 
   await page.getByLabel('主机地址').fill('127.0.0.1');
   await page.getByLabel('端口').fill('5433');

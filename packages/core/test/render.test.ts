@@ -1,0 +1,140 @@
+import type { Item, Perception } from '@doccue/protocol';
+import { describe, expect, it } from 'vitest';
+import { buildSystemPrompt, renderActions, renderConversation, renderLocator, renderScreen } from '../src/render/render.js';
+
+const NOW = 1_700_000_000_000;
+
+const perception: Perception = {
+  at: NOW,
+  screen: {
+    page: { path: '/datasource/new', title: '新建数据源' },
+    nodes: [
+      { ref: 1, role: 'heading', name: '新建数据源' },
+      {
+        ref: 2,
+        role: 'form',
+        name: '连接信息',
+        children: [
+          { ref: 3, role: 'textbox', name: '主机地址', value: 'http://127.0.0.1:5432', states: ['invalid'] },
+          { role: 'alert', name: 'Invalid Host Format' },
+          { ref: 4, role: 'textbox', name: '密码', states: ['password', 'filled'] },
+          { ref: 5, role: 'button', name: '保存', states: ['disabled'] },
+        ],
+      },
+    ],
+    truncated: 3,
+  },
+  actions: [
+    { at: NOW - 5000, action: { type: 'input', target: { role: 'textbox', name: '主机地址' }, value: 'http://127.0.0.1:5432' } },
+    {
+      at: NOW - 2000,
+      action: { type: 'click', target: { role: 'button', name: '测试连接' } },
+      effects: [{ type: 'error', text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } }],
+    },
+  ],
+};
+
+describe('renderScreen', () => {
+  it('prints the tree with numbers, values and states', () => {
+    expect(renderScreen(perception.screen).split('\n')).toEqual([
+      'page "新建数据源" /datasource/new',
+      '[1] heading "新建数据源"',
+      '[2] form "连接信息"',
+      '  [3] textbox "主机地址" = "http://127.0.0.1:5432" (invalid)',
+      '  alert "Invalid Host Format"',
+      '  [4] textbox "密码" (password, filled)',
+      '  [5] button "保存" (disabled)',
+      '... 3 more elements not shown',
+    ]);
+  });
+});
+
+describe('renderActions', () => {
+  it('prints actions with their effects and how long ago they happened', () => {
+    expect(renderActions(perception.actions, NOW)).toEqual([
+      '5s ago: input textbox "主机地址" = "http://127.0.0.1:5432"',
+      '2s ago: click button "测试连接" -> error "Invalid Host Format" on textbox "主机地址"',
+    ]);
+  });
+
+  it('folds identical consecutive actions and prints every kind of effect', () => {
+    const click = { type: 'click' as const, target: { role: 'button', name: '测试连接' } };
+    expect(
+      renderActions(
+        [
+          { at: NOW - 90_000, action: click },
+          { at: NOW - 80_000, action: click },
+          { at: NOW - 3000, effects: [{ type: 'navigate', page: { path: '/datasource', title: '数据源' } }] },
+          {
+            at: NOW - 1000,
+            action: { type: 'click', target: { role: 'button', name: '删除', within: [{ kind: 'dialog', name: '确认' }, { kind: 'row', name: 'mysql-prod' }] } },
+            effects: [
+              { type: 'request_failed', method: 'DELETE', path: '/api/datasources/1', status: 502, message: 'bad gateway' },
+              { type: 'dialog', state: 'closed', name: '确认' },
+              { type: 'notice', text: '已删除' },
+              { type: 'script_error', message: 'x is undefined' },
+            ],
+          },
+        ],
+        NOW,
+      ),
+    ).toEqual([
+      '1m ago: click button "测试连接" (x2)',
+      '3s ago: went to page "数据源" /datasource',
+      '1s ago: click button "删除" in row "mysql-prod" in dialog "确认" -> request DELETE /api/datasources/1 failed with 502: bad gateway; dialog "确认" closed; notice "已删除"; script error: x is undefined',
+    ]);
+  });
+});
+
+describe('renderLocator', () => {
+  it('leaves out an empty name', () => {
+    expect(renderLocator({ role: 'button', name: '' })).toBe('button');
+  });
+});
+
+describe('renderConversation', () => {
+  const answer = { role: 'assistant', content: [{ type: 'text', text: '去掉 http://' }] };
+  const conversation: Item[] = [
+    { type: 'user', text: '为什么连不上？', perception },
+    { type: 'model', messages: [answer] },
+    { type: 'user', text: '还是不行', perception: { ...perception, actions: [] } },
+  ];
+
+  it('puts the context before the question, and the locale and user in the first block only', () => {
+    const messages = renderConversation({ conversation, locale: 'zh-CN', user: { role: '新用户', seats: 3 } });
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
+    const first = String((messages[0] as { content: string }).content).split('\n');
+    expect(first.slice(0, 5)).toEqual([
+      '<context locale="zh-CN">',
+      'user: role=新用户, seats=3',
+      'recent actions:',
+      '5s ago: input textbox "主机地址" = "http://127.0.0.1:5432"',
+      '2s ago: click button "测试连接" -> error "Invalid Host Format" on textbox "主机地址"',
+    ]);
+    expect(first.slice(-2)).toEqual(['</context>', '为什么连不上？']);
+    expect(messages[1]).toBe(answer);
+    const third = String((messages[2] as { content: string }).content).split('\n');
+    expect(third.slice(0, 3)).toEqual(['<context>', 'screen:', 'page "新建数据源" /datasource/new']);
+  });
+
+  it('renders the same item to the same text when the conversation grows', () => {
+    const before = renderConversation({ conversation: conversation.slice(0, 1), locale: 'zh-CN' });
+    const after = renderConversation({ conversation, locale: 'zh-CN' });
+    expect(after[0]).toEqual(before[0]);
+  });
+
+  it('renders a guide result as the result of its tool call', () => {
+    const messages = renderConversation({
+      conversation: [{ type: 'guide_result', callId: 'c1', result: { outcome: 'completed', completedSteps: 2, perception: { ...perception, actions: [] } } }],
+    });
+    expect(messages).toEqual([
+      { role: 'tool', results: [{ callId: 'c1', content: expect.stringMatching(/^outcome: completed\ncompleted steps: 2\nscreen:\npage /) }] },
+    ]);
+  });
+});
+
+describe('buildSystemPrompt', () => {
+  it('puts the developer instructions first', () => {
+    expect(buildSystemPrompt('  你是「数据平台」的助手。 ')).toMatch(/^你是「数据平台」的助手。\n\nEach user message starts with a <context> block/);
+  });
+});

@@ -1,175 +1,113 @@
-import http from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { StreamEvent, TurnRequest } from '@doccue/protocol';
 import { describe, expect, it } from 'vitest';
-import { statusContext } from '../src/context/status-context.js';
-import type { ModelEvent, ModelRequest } from '../src/model/types.js';
-import { createScheduler } from '../src/scheduler/scheduler.js';
-import type { AgentOutput, Scheduler } from '../src/scheduler/types.js';
-import { createHandler, type HandlerOptions } from '../src/server/handler.js';
-import { toNodeHandler } from '../src/server/node.js';
-import { fakeModel, reply } from './helpers.js';
+import { respond } from '../src/agent/respond.js';
+import { createMemoryLog } from '../src/log/log.js';
+import { parseSSE } from '../src/model/sse.js';
+import { parseTurnRequest } from '../src/protocol/parse.js';
+import { createHandler } from '../src/server/handler.js';
+import { collect, done, fakeModel, reply, toolCall } from './helpers.js';
 
-const BASE = 'http://test/doccue';
-
-/** A scheduler that counts live subscriptions, to check streams clean up after themselves. */
-function counting(scheduler: Scheduler): Scheduler & { active: () => number } {
-  let active = 0;
-  return {
-    ...scheduler,
-    active: () => active,
-    subscribe(id, listener) {
-      active++;
-      const off = scheduler.subscribe(id, listener);
-      return () => {
-        active--;
-        off();
-      };
+const request = (text = '为什么连不上？'): TurnRequest => ({
+  v: 1,
+  locale: 'zh-CN',
+  conversation: [
+    {
+      type: 'user',
+      text,
+      perception: { at: 1000, screen: { page: { path: '/datasource/new' }, nodes: [{ ref: 1, role: 'button', name: '测试连接' }] }, actions: [] },
     },
-  };
+  ],
+});
+
+const post = (body: unknown, path = '/doccue/turn') =>
+  new Request(`http://localhost${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+async function readEvents(response: Response): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  for await (const message of parseSSE(response.body!)) events.push(JSON.parse(message.data) as StreamEvent);
+  return events;
 }
 
-function setup(steps: Array<(request: ModelRequest) => ModelEvent[]>, options: Partial<HandlerOptions> = {}) {
-  const model = fakeModel(...steps);
-  const scheduler = counting(createScheduler({ model, context: statusContext() }));
-  const handler = createHandler({ scheduler, basePath: '/doccue', keepAliveMs: 20, debug: true, ...options });
-  return { model, scheduler, handler };
-}
+describe('respond', () => {
+  it('renders the conversation, streams the answer and returns the messages to keep', async () => {
+    const model = fakeModel(() => reply('去掉 http://'));
+    const events = await collect(respond(request(), { model, instructions: '你是助手。' }));
 
-const post = (handler: (r: Request) => Promise<Response>, body: unknown, base = BASE) =>
-  handler(new Request(`${base}/events`, { method: 'POST', body: typeof body === 'string' ? body : JSON.stringify(body) }));
-
-/** Reads SSE data events from a response until `done` says so. */
-async function readOutputs(response: Response, done: (outputs: AgentOutput[]) => boolean): Promise<{ outputs: AgentOutput[]; raw: string }> {
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let raw = '';
-  let outputs: AgentOutput[] = [];
-  const deadline = Date.now() + 2000;
-  while (!done(outputs)) {
-    if (Date.now() > deadline) throw new Error(`timed out; got ${raw}`);
-    const { value, done: ended } = await reader.read();
-    if (ended) break;
-    raw += decoder.decode(value, { stream: true });
-    outputs = raw
-      .split('\n\n')
-      .map((block) => block.split('\n').find((line) => line.startsWith('data: ')))
-      .filter((line): line is string => line !== undefined)
-      .map((line) => JSON.parse(line.slice(6)) as AgentOutput);
-  }
-  await reader.cancel();
-  return { outputs, raw };
-}
-
-const ended = (outputs: AgentOutput[]) => outputs.some((o) => o.type === 'turn_end');
-
-describe('createHandler', () => {
-  it('takes events and streams the turn they start', async () => {
-    const { handler, model, scheduler } = setup([() => reply('把 http:// 去掉')]);
-    const stream = await handler(new Request(`${BASE}/stream?sessionId=s1`));
-    expect(stream.status).toBe(200);
-    expect(stream.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
-
-    const accepted = await post(handler, {
-      sessionId: 's1',
-      events: [
-        { type: 'perception', page: { path: '/datasource/new', title: '新建数据源' }, errors: [{ text: 'Invalid Host Format' }] },
-        { type: 'user_message', content: '为什么连不上？' },
-      ],
+    expect(model.requests[0]!.system).toMatch(/^你是助手。/);
+    expect(model.requests[0]!.messages).toEqual([
+      { role: 'user', content: '<context locale="zh-CN">\nscreen:\npage /datasource/new\n[1] button "测试连接"\n</context>\n为什么连不上？' },
+    ]);
+    expect(events[0]).toEqual({ type: 'status', state: 'thinking' });
+    expect(events.filter((event) => event.type === 'text').map((event) => event.delta).join('')).toBe('去掉 http://');
+    expect(events.at(-1)).toMatchObject({
+      type: 'end',
+      reason: 'completed',
+      item: { type: 'model', messages: [{ role: 'assistant', content: [{ type: 'text', text: '去掉 http://' }] }] },
     });
-    expect(accepted.status).toBe(204);
-
-    const { outputs, raw } = await readOutputs(stream, ended);
-    expect(raw.startsWith('retry: 3000\n')).toBe(true);
-    expect(outputs.map((o) => o.type)).toEqual(['turn_start', 'status', ...[...'把 http:// 去掉'].map(() => 'text'), 'turn_end']);
-    expect(JSON.stringify(model.requests[0]!.messages)).toContain('Invalid Host Format');
-    expect(scheduler.active()).toBe(0);
   });
 
-  it('rejects bad requests with a reason', async () => {
-    const { handler } = setup([], { maxBodyBytes: 200 });
-    const errors = async (response: Response) => [response.status, ((await response.json()) as { errors: string[] }).errors];
-
-    expect(await errors(await post(handler, '{not json'))).toEqual([400, ['body: invalid JSON']]);
-    expect(await errors(await post(handler, { sessionId: 's', events: [{ type: 'shout' }] }))).toEqual([
-      400,
-      ['events[0].type: expected user_message, perception, user_info or cancel'],
-    ]);
-    expect(await errors(await post(handler, { sessionId: 's', events: [{ type: 'user_message', content: 'x'.repeat(300) }] }))).toEqual([
-      413,
-      ['body: larger than 200 bytes'],
-    ]);
-    expect((await handler(new Request(`${BASE}/events`))).status).toBe(405);
-    expect((await handler(new Request(`${BASE}/stream?sessionId=s`, { method: 'POST', body: '{}' }))).status).toBe(405);
-    expect((await handler(new Request(`${BASE}/stream?sessionId=bad id`))).status).toBe(400);
-    expect((await handler(new Request(`${BASE}/nope`))).status).toBe(404);
-    expect((await handler(new Request('http://test/elsewhere/events', { method: 'POST', body: '{}' }))).status).toBe(404);
+  it('continues a conversation from the items it returned earlier', async () => {
+    const first = await collect(respond(request(), { model: fakeModel(() => reply('去掉 http://')) }));
+    const item = (first.at(-1) as Extract<StreamEvent, { type: 'end' }>).item;
+    const model = fakeModel(() => reply('端口不对'));
+    await collect(respond({ ...request(), conversation: [...request().conversation, item, ...request('还是不行').conversation] }, { model }));
+    expect(model.requests[0]!.messages.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
   });
 
-  it('unsubscribes when the client disconnects', async () => {
-    const { handler, scheduler } = setup([() => reply('ok')]);
-    const controller = new AbortController();
-    const stream = await handler(new Request(`${BASE}/stream?sessionId=s`, { signal: controller.signal }));
-    expect(scheduler.active()).toBe(1);
-    controller.abort();
-    expect(scheduler.active()).toBe(0);
-    // The session keeps working without a listener.
-    expect((await post(handler, { sessionId: 's', events: [{ type: 'user_message', content: 'hi' }] })).status).toBe(204);
-    await scheduler.idle('s');
-    expect(stream.body).not.toBeNull();
+  it('runs backend tools within the request and logs every step', async () => {
+    const { logger, records } = createMemoryLog();
+    const model = fakeModel(
+      () => [done([toolCall('c1', 'lookup', {})], 'tool_use')],
+      () => reply('好了'),
+    );
+    const events = await collect(
+      respond(request(), { model, logger, tools: [{ name: 'lookup', description: 'lookup', parameters: { type: 'object' }, execute: async () => 'found' }] }),
+    );
+    expect(events).toContainEqual({ type: 'status', state: 'tool', tool: 'lookup' });
+    const end = events.at(-1) as Extract<StreamEvent, { type: 'end' }>;
+    expect((end.item as { messages: Array<{ role: string }> }).messages.map((message) => message.role)).toEqual(['assistant', 'tool', 'assistant']);
+    expect(records.map((record) => record.kind)).toEqual(['request', 'model_call', 'model_call', 'end']);
+    const calls = records.filter((record) => record.kind === 'model_call');
+    expect(calls.map((call) => call.step)).toEqual([1, 2]);
+    // The logged request is exactly what the model received.
+    expect(calls[1]!.request.messages).toEqual(model.requests[1]!.messages);
   });
 
-  it('shows what the agent knows on the debug endpoint, only when enabled', async () => {
-    const { handler } = setup([]);
-    await post(handler, { sessionId: 's', events: [{ type: 'perception', page: { path: '/x', title: '页面 X' }, screen: '- button "保存"' }] });
-    const body = (await (await handler(new Request(`${BASE}/debug?sessionId=s`))).json()) as Record<string, unknown>;
-    expect(body).toMatchObject({ known: true, status: '页面：页面 X（/x）', screen: '- button "保存"', messages: 0 });
-    const off = createHandler({ scheduler: setup([]).scheduler, basePath: '/doccue' });
-    expect((await off(new Request(`${BASE}/debug?sessionId=s`))).status).toBe(404);
+  it('reports a model failure in the end event', async () => {
+    const model = fakeModel(() => {
+      throw new Error('boom');
+    });
+    expect((await collect(respond(request(), { model }))).at(-1)).toMatchObject({ type: 'end', reason: 'error', error: { message: 'boom' } });
   });
 });
 
-describe('toNodeHandler', () => {
-  async function serve(listener: http.RequestListener): Promise<{ origin: string; close: () => Promise<void> }> {
-    const server = http.createServer(listener);
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const { port } = server.address() as AddressInfo;
-    return {
-      origin: `http://127.0.0.1:${port}`,
-      close: () =>
-        new Promise((resolve) => {
-          server.closeAllConnections();
-          server.close(() => resolve());
-        }),
-    };
-  }
+describe('createHandler', () => {
+  it('answers POST {base}/turn with a stream of events', async () => {
+    const handler = createHandler({ model: fakeModel(() => reply('你好')), basePath: '/doccue/' });
+    const response = await handler(post(request()));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/event-stream');
+    const events = await readEvents(response);
+    expect(events.map((event) => event.type)).toEqual(['status', 'text', 'text', 'end']);
+  });
 
-  it('serves events and the stream over a real HTTP server, also when mounted Express-style', async () => {
-    const { handler } = setup([() => reply('一'), () => reply('二')]);
-    const node = toNodeHandler(handler);
-    // Express strips the mount path from req.url and keeps it in originalUrl.
-    const server = await serve((req, res) => {
-      const mounted = req as http.IncomingMessage & { originalUrl?: string };
-      if (req.url?.startsWith('/express/')) {
-        mounted.originalUrl = req.url.replace('/express', '');
-        req.url = req.url.replace('/express/doccue', '');
-      }
-      void node(mounted, res);
+  it('rejects other paths, methods and malformed bodies', async () => {
+    const handler = createHandler({ model: fakeModel(), basePath: '/doccue' });
+    expect((await handler(post(request(), '/doccue/other'))).status).toBe(404);
+    expect((await handler(new Request('http://localhost/doccue/turn'))).status).toBe(405);
+    const bad = await handler(post({ v: 1, conversation: [{ type: 'user', text: 1 }] }));
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { errors: string[] }).errors).toContain('conversation[0].text: expected a string');
+  });
+});
+
+describe('parseTurnRequest', () => {
+  it('accepts a well-formed request and names what is wrong otherwise', () => {
+    expect(parseTurnRequest(request())).toEqual({ ok: true, value: request() });
+    expect(parseTurnRequest({ v: 2, conversation: [] })).toEqual({ ok: false, errors: ['v: expected 1', 'conversation: expected a non-empty array'] });
+    expect(parseTurnRequest({ v: 1, conversation: [{ type: 'model', messages: [] }] })).toEqual({
+      ok: false,
+      errors: ['conversation: the last item must be a question or a guide result'],
     });
-    try {
-      for (const [prefix, question] of [['', '问一'], ['/express', '问二']] as const) {
-        const stream = await fetch(`${server.origin}${prefix}/doccue/stream?sessionId=n1`);
-        expect(stream.status).toBe(200);
-        const accepted = await fetch(`${server.origin}${prefix}/doccue/events`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ sessionId: 'n1', events: [{ type: 'user_message', content: question }] }),
-        });
-        expect(accepted.status).toBe(204);
-        const { outputs } = await readOutputs(stream, ended);
-        expect(outputs.at(-1)).toMatchObject({ type: 'turn_end', reason: 'completed' });
-      }
-    } finally {
-      await server.close();
-    }
   });
 });
