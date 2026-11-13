@@ -10,7 +10,8 @@
     "try": "pnpm --filter @doccue/core try",
     "chat": "pnpm --filter @doccue/core chat",
     "replay": "pnpm --filter @doccue/core replay",
-    "playground": "pnpm --filter @doccue/playground dev"
+    "playground": "pnpm --filter @doccue/playground dev",
+    "eval": "pnpm --filter @doccue/evals eval"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

@@ -206,4 +206,31 @@ describe('runTurn', () => {
     const { end } = await runTurnToEnd({ model, messages: [user('q')] });
     expect(end).toMatchObject({ reason: 'error', error: failure, messages: [] });
   });
+
+  it('stops at a tool that runs in the page and hands the call over', async () => {
+    const lookup = tool('lookup', async () => 'found');
+    const guide: Tool = {
+      name: 'guide',
+      description: 'guide',
+      parameters: { type: 'object', properties: {}, required: ['steps'] },
+      validate: (args) => ((args as { steps: unknown[] }).steps.length > 0 ? undefined : 'steps: empty'),
+    };
+    const model = fakeModel(
+      // Wrong arguments go back to the model like any tool error.
+      () => [done([toolCall('g0', 'guide', { steps: [] })], 'tool_use')],
+      // A backend tool called alongside runs first; a second page call is turned down.
+      () => [done([toolCall('l1', 'lookup', {}), toolCall('g1', 'guide', { steps: [1] }), toolCall('g2', 'guide', { steps: [2] })], 'tool_use')],
+    );
+    const { end } = await runTurnToEnd({ model, messages: [user('how?')], tools: [lookup, guide] });
+
+    expect(end.reason).toBe('page_tool');
+    expect(end.pageCall).toMatchObject({ id: 'g1', args: { steps: [1] } });
+    expect(end.messages.map((message) => message.role)).toEqual(['assistant', 'tool', 'assistant', 'tool']);
+    expect(end.messages[1]).toMatchObject({ results: [{ callId: 'g0', isError: true, content: 'Invalid arguments for guide: steps: empty' }] });
+    // The call handed over has no result yet: the frontend supplies it.
+    expect((end.messages[3] as { results: Array<{ callId: string; isError?: boolean }> }).results).toEqual([
+      { callId: 'l1', content: 'found' },
+      expect.objectContaining({ callId: 'g2', isError: true }),
+    ]);
+  });
 });

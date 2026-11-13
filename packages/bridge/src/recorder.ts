@@ -18,6 +18,8 @@ export interface RecorderOptions {
   /** Requests to leave out, e.g. the bridge's own. */
   skipUrl: (url: string) => boolean;
   onEntry: (entry: TimelineEntry) => void;
+  /** Called right when the user acts on a control, before its effects are known. */
+  onAction?: (element: Element) => void;
 }
 
 export interface Recorder {
@@ -57,8 +59,9 @@ export function createRecorder(options: RecorderOptions): Recorder {
     options.onEntry(unique.size > 0 ? { ...entry, effects: [...unique.values()] } : entry);
   };
 
-  const record = (type: ActionType, target: Locator, value?: string) => {
+  const record = (element: Element, type: ActionType, target: Locator, value?: string) => {
     finish();
+    options.onAction?.(element);
     const entry: TimelineEntry = { at: Date.now(), action: { type, target, ...(value === undefined ? {} : { value }) } };
     pending = { entry, effects: [], timer: setTimeout(finish, options.resultWindowMs) };
   };
@@ -85,7 +88,7 @@ export function createRecorder(options: RecorderOptions): Recorder {
     if (tag === 'INPUT' && NON_CLICK_INPUTS.has((control as HTMLInputElement).type)) return;
     const editable = control.getAttribute('contenteditable');
     if (editable !== null && editable !== 'false') return;
-    record('click', locatorOf(control));
+    record(control, 'click', locatorOf(control));
   });
 
   listen('change', (event) => {
@@ -94,14 +97,14 @@ export function createRecorder(options: RecorderOptions): Recorder {
     const target = locatorOf(field);
     if (field.tagName === 'SELECT') {
       const chosen = Array.from((field as HTMLSelectElement).selectedOptions).map((option) => clean(option.textContent));
-      record('select', target, chosen.join(', '));
+      record(field, 'select', target, chosen.join(', '));
     } else if (field.tagName === 'INPUT' || field.tagName === 'TEXTAREA') {
       const input = field as HTMLInputElement;
-      if (input.type === 'checkbox') record(input.checked ? 'check' : 'uncheck', target);
-      else if (input.type === 'radio') record('select', target);
+      if (input.type === 'checkbox') record(field, input.checked ? 'check' : 'uncheck', target);
+      else if (input.type === 'radio') record(field, 'select', target);
       // A password is recorded as filled in, never with its value.
-      else if (input.type === 'password' || input.type === 'file') record('input', target);
-      else record('input', target, input.value);
+      else if (input.type === 'password' || input.type === 'file') record(field, 'input', target);
+      else record(field, 'input', target, input.value);
     }
   });
 
@@ -110,7 +113,7 @@ export function createRecorder(options: RecorderOptions): Recorder {
     if (!form || isIgnored(form)) return;
     // Usually a click on the submit button already covers it.
     if (pending?.entry.action?.type === 'click') return;
-    record('submit', { role: 'form', name: clean(form.getAttribute('aria-label')) });
+    record(form, 'submit', { role: 'form', name: clean(form.getAttribute('aria-label')) });
   });
 
   // --- page changes ---------------------------------------------------------------------------

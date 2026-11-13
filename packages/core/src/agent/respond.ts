@@ -3,19 +3,20 @@
  * what to stream back. Nothing is kept between requests; the frontend holds the conversation and
  * sends it in full every time.
  */
-import type { StreamEvent, TurnRequest } from '@doccue/protocol';
+import type { GuideStep, StreamEvent, TurnRequest } from '@doccue/protocol';
 import { describeError, safeLog, withModelLog, type Logger } from '../log/log.js';
 import { runTurn } from '../loop/run-turn.js';
 import type { Tool } from '../loop/types.js';
 import { ModelError } from '../model/errors.js';
 import type { ModelAdapter } from '../model/types.js';
 import { buildSystemPrompt, renderConversation } from '../render/render.js';
+import { GUIDE_TOOL, guideTool, latestScreen } from './guide.js';
 
 export interface AgentOptions {
   model: ModelAdapter;
   /** The product-specific part of the system prompt: what the app is, tone, rules. */
   instructions?: string;
-  /** Tools that run on the backend. */
+  /** Extra tools that run on the backend. The `guide` tool is always there. */
   tools?: readonly Tool[];
   /** Model calls per request. Defaults to 10. */
   maxSteps?: number;
@@ -37,7 +38,7 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
     model,
     system: buildSystemPrompt(options.instructions),
     messages: renderConversation(request),
-    ...(options.tools ? { tools: options.tools } : {}),
+    tools: [...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(signal ? { signal } : {}),
@@ -52,7 +53,7 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
         yield { type: 'text', delta: event.delta };
         break;
       case 'tool_call':
-        yield { type: 'status', state: 'tool', tool: event.call.name };
+        if (event.call.name !== GUIDE_TOOL) yield { type: 'status', state: 'tool', tool: event.call.name };
         break;
       case 'turn_end': {
         const error = event.error
@@ -66,7 +67,15 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
           usage: event.usage,
           ...(event.error ? { error: describeError(event.error) } : {}),
         });
-        yield { type: 'end', reason: event.reason, item: { type: 'model', messages: event.messages }, usage: event.usage, ...(error ? { error } : {}) };
+        const item = { type: 'model' as const, messages: event.messages };
+        if (event.reason === 'page_tool') {
+          // The frontend runs the guide and sends its result with the next request.
+          const call = event.pageCall!;
+          yield { type: 'guide', callId: call.id, steps: (call.args as { steps: GuideStep[] }).steps };
+          yield { type: 'end', reason: 'guide', item, usage: event.usage };
+        } else {
+          yield { type: 'end', reason: event.reason, item, usage: event.usage, ...(error ? { error } : {}) };
+        }
         return;
       }
       default:

@@ -362,6 +362,12 @@ th {
   font-size: 12px;
 }
 
+.message.note {
+  align-self: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .message .meta,
 .muted,
 .thinking {

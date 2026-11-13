@@ -47,7 +47,7 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
   const recorded = panel.querySelector<HTMLElement>('.recorded')!;
   const context = panel.querySelector<HTMLElement>('.context')!;
 
-  const add = (role: 'user' | 'assistant' | 'system', html: string) => {
+  const add = (role: 'user' | 'assistant' | 'system' | 'note', html: string) => {
     const element = document.createElement('div');
     element.className = `message ${role}`;
     element.innerHTML = html;
@@ -56,33 +56,18 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     return element;
   };
 
+  // One bubble per request: a question can lead to several (an answer, a guide, a follow-up).
   let current: { element: HTMLElement; text: string } | undefined;
+  const bubble = () => (current ??= { element: add('assistant', '<span class="thinking">思考中…</span>'), text: '' });
   const finish = (meta: string) => {
     if (!current) return;
     current.element.classList.add('done');
-    if (!current.text) current.element.innerHTML = '<span class="muted">（没有回答）</span>';
+    if (!current.text) current.element.innerHTML = '';
     current.element.insertAdjacentHTML('beforeend', `<div class="meta">${meta}</div>`);
     current = undefined;
-    stop.hidden = true;
   };
 
-  bridge.on('status', (event) => {
-    if (current && !current.text) {
-      current.element.innerHTML = `<span class="thinking">${event.state === 'tool' ? `正在调用 ${escapeHtml(event.tool ?? '工具')}…` : '思考中…'}</span>`;
-    }
-  });
-  bridge.on('text', (event) => {
-    if (!current) return;
-    current.text += event.delta;
-    current.element.innerHTML = markdown(current.text);
-    messages.scrollTop = messages.scrollHeight;
-  });
-  bridge.on('end', (event) => {
-    const { inputTokens, outputTokens } = event.usage;
-    finish(event.reason === 'completed' ? `输入 ${inputTokens} · 输出 ${outputTokens} tokens` : `${event.reason}${event.error ? `：${escapeHtml(event.error.message)}` : ''}`);
-  });
-
-  /** Shows the last question as the model reads it (rendered by the playground server). */
+  /** Shows what the model was sent last, as it reads it (rendered by the playground server). */
   const showContext = async () => {
     const response = await fetch('/debug/render', {
       method: 'POST',
@@ -92,6 +77,30 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     context.textContent = ((await response.json()) as { text?: string }).text || '（空）';
   };
 
+  bridge.on('status', (event) => {
+    const { element, text } = bubble();
+    if (!text) element.innerHTML = `<span class="thinking">${event.state === 'tool' ? `正在调用 ${escapeHtml(event.tool ?? '工具')}…` : '思考中…'}</span>`;
+  });
+  bridge.on('text', (event) => {
+    const active = bubble();
+    active.text += event.delta;
+    active.element.innerHTML = markdown(active.text);
+    messages.scrollTop = messages.scrollHeight;
+  });
+  bridge.on('guide', (event) => add('note', `开始引导（${event.steps.length} 步）：${event.steps.map((step) => `[${String(step.target)}] ${escapeHtml(step.text)}`).join(' → ')}`));
+  bridge.on('guide_end', (event) => {
+    add('note', `引导结束：${event.outcome}，完成 ${event.completedSteps} 步`);
+    void showContext();
+  });
+  bridge.on('end', (event) => {
+    bubble();
+    const { inputTokens, outputTokens } = event.usage;
+    const tokens = `输入 ${inputTokens} · 输出 ${outputTokens} tokens`;
+    if (event.reason === 'completed') finish(tokens);
+    else if (event.reason === 'guide') finish(`在页面上引导 · ${tokens}`);
+    else finish(`${event.reason}${event.error ? `：${escapeHtml(event.error.message)}` : ''}`);
+  });
+
   panel.querySelector('form')!.addEventListener('submit', async (event) => {
     event.preventDefault();
     const question = textarea.value.trim();
@@ -99,8 +108,8 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     textarea.value = '';
     finish('已停止');
     add('user', escapeHtml(question));
-    const mine = (current = { element: add('assistant', '<span class="thinking">思考中…</span>'), text: '' });
     stop.hidden = false;
+    panel.dataset.busy = String(Number(panel.dataset.busy ?? 0) + 1);
     try {
       const asked = bridge.ask(question);
       void showContext();
@@ -108,8 +117,12 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     } catch (error) {
       add('system', escapeHtml(error instanceof Error ? error.message : String(error)));
     }
-    // No end event arrived for this question: it was stopped or it failed.
-    if (current === mine) finish('已停止');
+    // The exchange is over (answered, stopped or replaced by a newer question).
+    panel.dataset.busy = String(Number(panel.dataset.busy) - 1);
+    if (panel.dataset.busy === '0') {
+      finish('已停止');
+      stop.hidden = true;
+    }
   });
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {

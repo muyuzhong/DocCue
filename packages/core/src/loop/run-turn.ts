@@ -139,9 +139,19 @@ export async function* runTurn(options: TurnOptions): AsyncGenerator<LoopEvent, 
       }
 
       for (const call of calls) yield { type: 'tool_call', call };
-      const results = await runTools(calls, tools, signal);
-      append({ role: 'tool', results });
+      // A tool that runs in the page ends the turn. Only one per step: the frontend answers it
+      // with the next request, after any backend tools called alongside it have run here.
+      const pageCall = calls.find((call) => {
+        const tool = tools.get(call.name);
+        return tool !== undefined && !tool.execute && problemWith(tool, call) === undefined;
+      });
+      const results = await runTools(calls.filter((call) => call !== pageCall), tools, signal);
+      if (results.length > 0) append({ role: 'tool', results });
       for (const result of results) yield { type: 'tool_result', result };
+      if (pageCall && !signal.aborted) {
+        yield end('page_tool', { pageCall });
+        return;
+      }
 
       if (signal.aborted) {
         yield cancelled();
@@ -185,11 +195,9 @@ async function runTools(calls: readonly ToolCallPart[], tools: ReadonlyMap<strin
       if (signal.aborted) return fail('Cancelled: the turn was stopped before this tool ran.');
       const tool = tools.get(call.name);
       if (!tool) return fail(`Unknown tool "${call.name}".`);
-      if (call.args === undefined) {
-        return fail(`INVALID_JSON: the arguments for ${call.name} are not valid JSON. Call the tool again with valid JSON.`);
-      }
-      const problem = checkArgs(tool, call.args);
-      if (problem) return fail(`Invalid arguments for ${call.name}: ${problem}`);
+      const problem = problemWith(tool, call);
+      if (problem) return fail(problem);
+      if (!tool.execute) return fail(`Only one ${call.name} call at a time. Call it again after the first one has finished.`);
       try {
         const content = await raceAbort(tool.execute(call.args, { callId: call.id, signal }), signal);
         return { callId: call.id, content };
@@ -201,7 +209,14 @@ async function runTools(calls: readonly ToolCallPart[], tools: ReadonlyMap<strin
   );
 }
 
-/** A light check against the tool's schema: object shape and required keys. Tools validate the rest. */
+/** What is wrong with a call's arguments, as a message for the model; `undefined` if they are fine. */
+function problemWith(tool: Tool, call: ToolCallPart): string | undefined {
+  if (call.args === undefined) return `INVALID_JSON: the arguments for ${call.name} are not valid JSON. Call the tool again with valid JSON.`;
+  const problem = checkArgs(tool, call.args) ?? tool.validate?.(call.args);
+  return problem ? `Invalid arguments for ${call.name}: ${problem}` : undefined;
+}
+
+/** A light check against the tool's schema: object shape and required keys. `validate` does the rest. */
 function checkArgs(tool: Tool, args: unknown): string | undefined {
   if (tool.parameters.type !== 'object') return undefined;
   if (typeof args !== 'object' || args === null || Array.isArray(args)) return 'expected a JSON object';

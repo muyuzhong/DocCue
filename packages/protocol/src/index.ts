@@ -112,7 +112,10 @@ export interface GuideResult {
    * - `exited`: the user closed the guide
    */
   outcome: 'completed' | 'deviated' | 'not_found' | 'interrupted' | 'exited';
+  /** Steps the guide got past, whether the user did them or skipped them. */
   completedSteps: number;
+  /** Steps (counted from 1) the user passed with Next without acting on the element. */
+  skippedSteps?: number[];
   /** What the user did during the guide and the screen at its end. */
   perception: Perception;
 }
@@ -148,13 +151,15 @@ export interface Usage {
 
 /**
  * - `completed`: the model gave its answer
+ * - `guide`: the model started a guide (see the `guide` event); the frontend runs it and sends
+ *   the result with the next request
  * - `max_steps`: stopped after too many model calls
  * - `max_tokens`: the answer was cut off by the token limit
  * - `refusal`: the provider declined
  * - `aborted` / `timeout`: the request was cancelled / took too long
  * - `error`: a model failure (see `error`)
  */
-export type EndReason = 'completed' | 'max_steps' | 'max_tokens' | 'refusal' | 'aborted' | 'timeout' | 'error';
+export type EndReason = 'completed' | 'guide' | 'max_steps' | 'max_tokens' | 'refusal' | 'aborted' | 'timeout' | 'error';
 
 /** What `POST {base}/turn` streams back, one JSON object per server-sent event. */
 export type StreamEvent =

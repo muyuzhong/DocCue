@@ -6,4 +6,5 @@ export * from './render/index.js';
 export * from './protocol/index.js';
 export * from './log/index.js';
 export { respond, type AgentOptions } from './agent/respond.js';
+export { GUIDE_TOOL } from './agent/guide.js';
 export { createHandler, type FetchHandler, type HandlerOptions } from './server/handler.js';

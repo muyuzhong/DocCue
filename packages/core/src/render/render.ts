@@ -15,11 +15,13 @@ const CONTEXT_GUIDE = `Each user message starts with a <context> block written b
 Use the context to work out what the user is trying to do and what went wrong. Refer to controls by the names shown on screen. Never mention the context block or the numbers to the user.
 Answer in the user's language (the locale given in the first context block, unless they write in another language), briefly and concretely.`;
 
+const GUIDE_GUIDE = `You cannot operate the app; the user does. When the answer involves something on the user's screen (where to click, which field to fix, how to get somewhere), show it with the guide tool instead of only describing it: say in one sentence what the problem or the plan is, then call guide. Put the instructions into the steps, not into your reply. The user's question sets the goal. When a guide comes back, check in the result whether that goal is reached: if it is, say so in a sentence and stop, even if other things on the page are unfinished; guide again only if something is still in the way of what they asked. A step the user skipped was their choice: don't guide them through it again, mention it in words if it matters. For questions that need no pointing, just answer.`;
+
 /** Recent actions shown per context block. */
 const MAX_ACTIONS = 20;
 
 export function buildSystemPrompt(instructions: string = DEFAULT_INSTRUCTIONS): string {
-  return `${instructions.trim()}\n\n${CONTEXT_GUIDE}`;
+  return `${instructions.trim()}\n\n${CONTEXT_GUIDE}\n\n${GUIDE_GUIDE}`;
 }
 
 const quote = (text: string) => JSON.stringify(text);
@@ -114,7 +116,9 @@ function renderUser(user: Record<string, unknown>): string {
 
 /** What a guide did, as the result of the `guide` tool call. */
 function renderGuideResult(result: GuideResult): string {
-  return [`outcome: ${result.outcome}`, `completed steps: ${result.completedSteps}`, ...renderPerception(result.perception)].join('\n');
+  const lines = [`outcome: ${result.outcome}`, `completed steps: ${result.completedSteps}`];
+  if (result.skippedSteps && result.skippedSteps.length > 0) lines.push(`skipped by the user (pressed Next without doing them): step ${result.skippedSteps.join(', ')}`);
+  return [...lines, ...renderPerception(result.perception)].join('\n');
 }
 
 export type RenderInput = Pick<TurnRequest, 'conversation' | 'locale' | 'user'>;
@@ -133,7 +137,11 @@ export function renderConversation({ conversation, locale, user }: RenderInput):
     } else if (item.type === 'model') {
       messages.push(...(item.messages as Message[]));
     } else {
-      messages.push({ role: 'tool', results: [{ callId: item.callId, content: renderGuideResult(item.result) }] });
+      const result = { callId: item.callId, content: renderGuideResult(item.result) };
+      // Backend tools called in the same step already left their results: one message for all.
+      const last = messages[messages.length - 1];
+      if (last?.role === 'tool') messages[messages.length - 1] = { role: 'tool', results: [...last.results, result] };
+      else messages.push({ role: 'tool', results: [result] });
     }
   }
   return messages;

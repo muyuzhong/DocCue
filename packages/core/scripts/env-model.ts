@@ -3,7 +3,12 @@
  * environment (variables already set in the environment win). See .env.example.
  */
 import { existsSync } from 'node:fs';
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { createModelFromEnv, type ModelAdapter } from '../src/index.js';
+
+// Node gives each address of a host only 250 ms to connect before trying the next one; on a slow
+// link every attempt times out and the request fails with ETIMEDOUT. Give them longer.
+setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 const ENV_FILE = new URL('../../../.env', import.meta.url);
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);

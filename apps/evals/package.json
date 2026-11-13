@@ -1,0 +1,16 @@
+{
+  "name": "@doccue/evals",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "tsx --conditions=source run.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@doccue/bridge": "workspace:*",
+    "@doccue/core": "workspace:*"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.4"
+  }
+}

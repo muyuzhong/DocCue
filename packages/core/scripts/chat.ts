@@ -1,7 +1,7 @@
 /**
  * Multi-turn chat from the command line, playing the frontend's part: it keeps the conversation,
  * and commands simulate what the bridge would report, so the prompt and the rendering can be
- * tried with a real model without a browser.
+ * tried with a real model without a browser. Guides are printed, not run.
  *
  *   ANTHROPIC_API_KEY=... pnpm chat
  *
@@ -105,12 +105,20 @@ async function ask(text: string): Promise<void> {
   conversation.push({ type: 'user', text, perception: perceive() });
   actions = [];
   running = new AbortController();
+  let guideCall: string | undefined;
   process.stdout.write('\n助手：');
   for await (const event of respond({ v: PROTOCOL_VERSION, conversation, locale: 'zh-CN' }, options, running.signal)) {
     if (event.type === 'text') process.stdout.write(event.delta);
     else if (event.type === 'status' && event.state === 'tool') process.stdout.write(`\n[调用工具 ${event.tool}]\n`);
-    else if (event.type === 'end') {
+    else if (event.type === 'guide') {
+      // There is no page to show a guide on: print it, and record it as closed by the user.
+      for (const step of event.steps) process.stdout.write(`\n[引导] [${String(step.target)}] ${step.text}`);
+      guideCall = event.callId;
+    } else if (event.type === 'end') {
       if (event.item.type === 'model' && event.item.messages.length > 0) conversation.push(event.item);
+      if (event.reason === 'guide' && guideCall) {
+        conversation.push({ type: 'guide_result', callId: guideCall, result: { outcome: 'exited', completedSteps: 0, perception: perceive() } });
+      }
       const { inputTokens, cacheReadTokens, outputTokens } = event.usage;
       const error = event.error ? `：${event.error.message}` : '';
       process.stdout.write(`\n[${event.reason}${error}；输入 ${inputTokens}（缓存 ${cacheReadTokens}），输出 ${outputTokens} tokens]\n`);

@@ -1,4 +1,4 @@
-import type { StreamEvent, TurnRequest } from '@doccue/protocol';
+import type { Item, StreamEvent, TurnRequest } from '@doccue/protocol';
 import { describe, expect, it } from 'vitest';
 import { respond } from '../src/agent/respond.js';
 import { createMemoryLog } from '../src/log/log.js';
@@ -71,6 +71,32 @@ describe('respond', () => {
     expect(calls.map((call) => call.step)).toEqual([1, 2]);
     // The logged request is exactly what the model received.
     expect(calls[1]!.request.messages).toEqual(model.requests[1]!.messages);
+  });
+
+  it('hands a guide to the frontend and continues from its result', async () => {
+    const steps = [{ target: 1, text: '点这里重新测试' }];
+    const model = fakeModel(
+      // [7] is not on the screen: the model is told and tries again.
+      () => [done([toolCall('g0', 'guide', { steps: [{ target: 7, text: '点这里' }] })], 'tool_use')],
+      () => reply('我指给你看。', [toolCall('g1', 'guide', { steps })], 'tool_use'),
+    );
+    const events = await collect(respond(request(), { model }));
+    expect(model.requests[0]!.tools?.map((tool) => tool.name)).toEqual(['guide']);
+    expect(events.filter((event) => event.type === 'status' && event.state === 'tool')).toEqual([]);
+    expect(events.slice(-2)).toMatchObject([
+      { type: 'guide', callId: 'g1', steps },
+      { type: 'end', reason: 'guide' },
+    ]);
+    const item = (events.at(-1) as Extract<StreamEvent, { type: 'end' }>).item;
+    expect(JSON.stringify(item)).toContain('there is no element [7] on the latest screen');
+
+    // Next request: the conversation plus the guide's result, which the model reads as the tool result.
+    const perception = (request().conversation[0] as Extract<Item, { type: 'user' }>).perception;
+    const next = fakeModel(() => reply('已经连上了。'));
+    const result = { type: 'guide_result' as const, callId: 'g1', result: { outcome: 'completed' as const, completedSteps: 1, perception } };
+    const after = await collect(respond({ ...request(), conversation: [...request().conversation, item, result] }, { model: next }));
+    expect(next.requests[0]!.messages.at(-1)).toMatchObject({ role: 'tool', results: [{ callId: 'g1', content: expect.stringMatching(/^outcome: completed/) }] });
+    expect(after.at(-1)).toMatchObject({ type: 'end', reason: 'completed' });
   });
 
   it('reports a model failure in the end event', async () => {

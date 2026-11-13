@@ -123,12 +123,14 @@ describe('renderConversation', () => {
     expect(after[0]).toEqual(before[0]);
   });
 
-  it('renders a guide result as the result of its tool call', () => {
-    const messages = renderConversation({
-      conversation: [{ type: 'guide_result', callId: 'c1', result: { outcome: 'completed', completedSteps: 2, perception: { ...perception, actions: [] } } }],
-    });
-    expect(messages).toEqual([
-      { role: 'tool', results: [{ callId: 'c1', content: expect.stringMatching(/^outcome: completed\ncompleted steps: 2\nscreen:\npage /) }] },
+  it('renders a guide result as the result of its tool call, next to results already there', () => {
+    const result: Item = { type: 'guide_result', callId: 'c1', result: { outcome: 'completed', completedSteps: 2, skippedSteps: [2], perception: { ...perception, actions: [] } } };
+    const content = expect.stringMatching(/^outcome: completed\ncompleted steps: 2\nskipped by the user \(pressed Next without doing them\): step 2\nscreen:\npage /);
+    expect(renderConversation({ conversation: [result] })).toEqual([{ role: 'tool', results: [{ callId: 'c1', content }] }]);
+
+    const earlier = { role: 'tool', results: [{ callId: 'c0', content: 'found' }] };
+    expect(renderConversation({ conversation: [{ type: 'model', messages: [earlier] }, result] })).toEqual([
+      { role: 'tool', results: [{ callId: 'c0', content: 'found' }, { callId: 'c1', content }] },
     ]);
   });
 });

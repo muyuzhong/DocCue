@@ -9,18 +9,22 @@
  */
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { setDefaultAutoSelectFamilyAttemptTimeout, type AddressInfo } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createHandler, createModelFromEnv, renderLastUserMessage, toJsonLine, withRetry, type TurnRequest } from '@doccue/core';
+import { createHandler, createModelFromEnv, renderConversation, toJsonLine, withRetry, type TurnRequest } from '@doccue/core';
 import { toNodeHandler } from '@doccue/core/node';
 import { createServer as createViteServer, defaultClientConditions } from 'vite';
+
+// Node gives each address of a host only 250 ms to connect before trying the next one; on a slow
+// link every attempt times out and the request fails with ETIMEDOUT. Give them longer.
+setDefaultAutoSelectFamilyAttemptTimeout(2000);
 
 const APP_DIR = fileURLToPath(new URL('.', import.meta.url));
 const ENV_FILE = new URL('../../.env', import.meta.url);
 
 const INSTRUCTIONS = `你是「数据平台」的应用内助手。数据平台用来接入和管理数据库数据源：在「数据源」页面查看和删除数据源，在「新建数据源」页面填写名称、数据库类型、主机地址、端口、用户名和密码，先点「测试连接」，连接成功后才能「保存」。
-各数据库的默认端口：MySQL 3306，PostgreSQL 5432，ClickHouse 8123。
-用户遇到问题时，结合他的操作、报错和当前界面，直接说明原因和下一步该怎么做，简短具体。`;
+各数据库的默认端口：MySQL 3306，PostgreSQL 5432，ClickHouse 8123。主机地址只填 IP 或域名，不带协议和端口。
+用户遇到问题时，结合他的操作、报错和当前界面，直接说明原因，并在页面上指给他看下一步该怎么做。`;
 
 // --- mock backend -------------------------------------------------------------------------------
 
@@ -104,9 +108,12 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
       logger: (record) => appendFileSync(logFile, `${toJsonLine(record)}\n`),
     }),
   );
-  // For the "what the agent sees" panel: the last question as the model reads it.
+  // For the "what the agent sees" panel: what the model was sent last (a question or a guide
+  // result), as it reads it.
   const debug = async (req: IncomingMessage, res: ServerResponse) => {
-    send(res, 200, { text: renderLastUserMessage((await readJson(req)) as unknown as TurnRequest) ?? '' });
+    const last = renderConversation((await readJson(req)) as unknown as TurnRequest).at(-1);
+    const text = last?.role === 'tool' ? last.results.map((result) => result.content).join('\n') : last?.role === 'user' ? last.content : '';
+    send(res, 200, { text });
   };
 
   const vite = await createViteServer({

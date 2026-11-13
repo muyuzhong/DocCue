@@ -15,15 +15,19 @@ export interface ToolContext {
   signal: AbortSignal;
 }
 
-/**
- * What the loop needs from a tool. The tools layer implements this; the loop only calls it.
- * Throwing from `execute` turns into an error result the model can read.
- */
+/** What the loop needs from a tool. */
 export interface Tool {
   name: string;
   description: string;
   parameters: JsonSchema;
-  execute(args: unknown, context: ToolContext): Promise<string | UserContent[]>;
+  /**
+   * Runs the tool on the backend. Throwing turns into an error result the model can read.
+   * A tool without `execute` runs in the page: the turn stops there and hands the call over
+   * (see `TurnEnd.pageCall`).
+   */
+  execute?(args: unknown, context: ToolContext): Promise<string | UserContent[]>;
+  /** A check of the arguments beyond the schema's required keys. Returns what is wrong, if anything. */
+  validate?(args: unknown): string | undefined;
 }
 
 export interface BeforeModelCallContext {
@@ -53,13 +57,14 @@ export interface TurnOptions {
 
 /**
  * - `completed`: the model gave its answer
+ * - `page_tool`: the model called a tool that runs in the page (see `pageCall`)
  * - `max_steps`: stopped after `maxSteps` model calls
  * - `max_tokens`: the answer was cut off by the token limit
  * - `refusal`: the provider declined; the partial answer was discarded
  * - `aborted` / `timeout`: cancelled through `signal` / `timeoutMs`
  * - `error`: a model failure (see `error`)
  */
-export type TurnEndReason = 'completed' | 'max_steps' | 'max_tokens' | 'refusal' | 'aborted' | 'timeout' | 'error';
+export type TurnEndReason = 'completed' | 'page_tool' | 'max_steps' | 'max_tokens' | 'refusal' | 'aborted' | 'timeout' | 'error';
 
 export interface TurnEnd {
   type: 'turn_end';
@@ -69,6 +74,8 @@ export interface TurnEnd {
   /** Summed over every model call in the turn. */
   usage: Usage;
   error?: Error;
+  /** With `page_tool`: the call the frontend has to run. Its result comes with the next turn. */
+  pageCall?: ToolCallPart;
   /** Provider details on a refusal. */
   stopDetails?: unknown;
 }
