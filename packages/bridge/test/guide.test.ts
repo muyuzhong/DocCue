@@ -44,7 +44,7 @@ describe('runGuide', () => {
     expect(overlay()!.querySelector('.progress')!.textContent).toBe('1 / 2');
     expect(overlay()!.querySelector('.next')!.textContent).toBe('下一步');
 
-    running.action($('#test')); // not the current step's element
+    running.action($('h1')); // not an element of any step
     expect(bubbleText()).toBe('去掉 http://');
     running.action($('#host'));
     expect(bubbleText()).toBe('再测一次');
@@ -65,6 +65,33 @@ describe('runGuide', () => {
     expect(bubbleText()).toBe('填主机地址');
     overlay()!.querySelector<HTMLButtonElement>('.exit')!.click();
     await expect(running.done).resolves.toEqual({ outcome: 'exited', completedSteps: 1 });
+  });
+
+  it('jumps ahead when the user does a later step first, and counts the ones in between as skipped', async () => {
+    const running = start([
+      { selector: 'h1', text: '这里是新建页面', expect: 'ack' },
+      { selector: '#host', text: '填主机地址' },
+      { selector: '#test', text: '再测一次' },
+    ]);
+    running.action($('#test'));
+    await expect(running.done).resolves.toEqual({ outcome: 'completed', completedSteps: 3, skippedSteps: [2] });
+  });
+
+  it('continues from where a guide was and reports each move', async () => {
+    const moves: unknown[] = [];
+    guide = runGuide({
+      document,
+      steps: [{ target: 1, text: '填主机地址' }, { target: 2, text: '再测一次' }],
+      find: (index) => [$('#host'), $('#test')][index],
+      messages: messagesFor('en'),
+      waitMs: 150,
+      start: { completedSteps: 1, skippedSteps: [1] },
+      onProgress: (progress) => moves.push(progress),
+    });
+    expect(bubbleText()).toBe('再测一次');
+    expect(overlay()!.querySelector('.next')!.textContent).toBe('Done');
+    guide.action($('#test'));
+    expect(moves).toEqual([{ completedSteps: 2, skippedSteps: [1] }]);
   });
 
   it('reports steps passed with Next as skipped', async () => {
@@ -143,18 +170,28 @@ describe('createBridge with guides', () => {
     { type: 'end', reason: 'completed', item: model([{ type: 'text', text }]), usage },
   ];
 
+  const create = () => createBridge({ endpoint: '/doccue', resultWindowMs: 20, targetWaitMs: 150, settle: { quietMs: 20, maxMs: 200 } });
+  /** Resolves when the bridge is done with the question it is working on. */
+  const idle = (target: Bridge) =>
+    new Promise<void>((resolve) => {
+      if (!target.busy()) resolve();
+      else target.on('state', (event) => !event.busy && resolve());
+    });
   let bridge: Bridge;
   let posts: TurnRequest[];
-  let answers: StreamEvent[][];
+  /** What each request gets, in order. `hang`: no answer until the request is aborted. */
+  let answers: Array<StreamEvent[] | 'hang'>;
   const originalFetch = window.fetch;
 
   beforeEach(() => {
     posts = [];
     window.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
       posts.push(JSON.parse(String(init?.body)) as TurnRequest);
-      return sse(answers.shift()!);
+      const answer = answers.shift()!;
+      if (answer !== 'hang') return sse(answer);
+      return new Promise((_, reject) => init!.signal!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
     };
-    bridge = createBridge({ endpoint: '/doccue', resultWindowMs: 20, targetWaitMs: 150 });
+    bridge = create();
   });
   afterEach(() => {
     bridge.destroy();
@@ -213,14 +250,73 @@ describe('createBridge with guides', () => {
     expect(bridge.conversation().at(-1)).toMatchObject({ type: 'guide_result', result: { outcome: 'exited' } });
   });
 
-  it('closes a guide that a page reload left without a result', async () => {
-    answers = [guideAnswer('g1'), textAnswer('好的。')];
+  it('says when it is busy', async () => {
+    answers = [guideAnswer('g1')];
+    const states: boolean[] = [];
+    bridge.on('state', (event) => states.push(event.busy));
     void bridge.ask('为什么连不上？');
     await sleep(20);
-    bridge.destroy(); // the page goes away with the guide on screen
-    bridge = createBridge({ endpoint: '/doccue', resultWindowMs: 20 });
-    await bridge.ask('刚才说到哪了？');
-    expect(posts[1]!.conversation.map((item) => item.type)).toEqual(['user', 'model', 'guide_result', 'user']);
-    expect(posts[1]!.conversation[2]).toMatchObject({ callId: 'g1', result: { outcome: 'exited', completedSteps: 0 } });
+    expect(bridge.busy()).toBe(true);
+    bridge.stop();
+    expect(bridge.busy()).toBe(false);
+    expect(states).toEqual([true, false]);
+    expect(bridge.conversation().at(-1)).toMatchObject({ type: 'guide_result', result: { outcome: 'exited' } });
+  });
+
+  it('continues a guide on the next page after a full page load', async () => {
+    answers = [guideAnswer('g1'), textAnswer('连上了。')];
+    void bridge.ask('为什么连不上？');
+    await sleep(20);
+    const host = $<HTMLInputElement>('#host');
+    host.value = '127.0.0.1';
+    host.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(bubbleText()).toBe('再测一次');
+
+    bridge.destroy(); // the page goes away with the guide on its second step
+    document.body.innerHTML = PAGE;
+    bridge = create();
+    await sleep(20);
+    expect(bubbleText()).toBe('再测一次');
+    expect(overlay()!.querySelector('.progress')!.textContent).toBe('2 / 2');
+    $('#test').click();
+    await idle(bridge);
+
+    expect(posts[1]!.conversation.map((item) => item.type)).toEqual(['user', 'model', 'guide_result']);
+    expect(posts[1]!.conversation[2]).toMatchObject({ callId: 'g1', result: { outcome: 'completed', completedSteps: 2 } });
+    expect(bridge.conversation().map((item) => item.type)).toEqual(['user', 'model', 'guide_result', 'model']);
+  });
+
+  it('reports a guide whose last step loaded a new page, and gets the answer still owed', async () => {
+    answers = [guideAnswer('g1'), textAnswer('连上了。')];
+    void bridge.ask('为什么连不上？');
+    await sleep(20);
+    $<HTMLInputElement>('#host').dispatchEvent(new Event('change', { bubbles: true }));
+    $('#test').click(); // the last step: the guide is complete, and the page goes away at once
+    bridge.destroy();
+    expect(posts).toHaveLength(1);
+
+    document.body.innerHTML = '<h1>数据源</h1>';
+    bridge = create();
+    await idle(bridge);
+    expect(posts).toHaveLength(2);
+    const result = posts[1]!.conversation[2] as Extract<Item, { type: 'guide_result' }>;
+    expect(result).toMatchObject({ callId: 'g1', result: { outcome: 'completed', completedSteps: 2 } });
+    expect(result.result.perception.screen.nodes).toEqual([{ ref: 1, role: 'heading', name: '数据源' }]);
+  });
+
+  it('asks again on the next page when the page went away before the answer came', async () => {
+    answers = ['hang', textAnswer('好的。')];
+    void bridge.ask('怎么新建数据源？');
+    await sleep(20);
+    bridge.destroy();
+    bridge = create();
+    await idle(bridge);
+    expect(posts[1]!.conversation).toEqual(posts[0]!.conversation);
+    expect(bridge.conversation().map((item) => item.type)).toEqual(['user', 'model']);
+    // Nothing is owed any more: a third page asks nothing.
+    bridge.destroy();
+    bridge = create();
+    await sleep(20);
+    expect(posts).toHaveLength(2);
   });
 });

@@ -38,11 +38,13 @@ interface Datasource {
 }
 
 const DEFAULT_PORTS: Record<string, number> = { MySQL: 3306, PostgreSQL: 5432, ClickHouse: 8123 };
-const datasources: Datasource[] = [
+const SEED: Datasource[] = [
   { id: 1, name: 'mysql-prod', kind: 'MySQL', host: '10.0.0.12', port: 3306, status: '正常' },
   { id: 2, name: 'pg-test', kind: 'PostgreSQL', host: '10.0.0.31', port: 5432, status: '连接失败' },
   { id: 3, name: 'clickhouse-logs', kind: 'ClickHouse', host: 'ch.internal', port: 8123, status: '正常' },
 ];
+/** The mock data; every `start()` begins with the seed again. */
+const datasources: Datasource[] = [];
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   let raw = '';
@@ -95,6 +97,7 @@ async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
 export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ url: string; server: Server; close: () => Promise<void> }> {
   if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
   const model = createModelFromEnv(process.env);
+  datasources.splice(0, datasources.length, ...SEED.map((item) => ({ ...item })));
 
   const logDir = new URL('.logs/', import.meta.url);
   mkdirSync(logDir, { recursive: true });

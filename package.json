@@ -11,7 +11,8 @@
     "chat": "pnpm --filter @doccue/core chat",
     "replay": "pnpm --filter @doccue/core replay",
     "playground": "pnpm --filter @doccue/playground dev",
-    "eval": "pnpm --filter @doccue/evals eval"
+    "eval": "pnpm --filter @doccue/evals eval",
+    "journeys": "pnpm --filter @doccue/playground journeys"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

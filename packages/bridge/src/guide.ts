@@ -18,6 +18,10 @@ export interface GuideOptions {
   messages: Messages;
   /** How long to wait for a step's element before giving up. */
   waitMs: number;
+  /** Where to start, when a guide continues after a page reload. */
+  start?: Omit<GuideEnd, 'outcome'>;
+  /** Called whenever the guide moves on, so its progress can be saved. */
+  onProgress?: (progress: Omit<GuideEnd, 'outcome'>) => void;
 }
 
 export interface RunningGuide {
@@ -72,9 +76,9 @@ export function runGuide(options: GuideOptions): RunningGuide {
   exit.textContent = messages.exit;
   document.body.append(host);
 
-  let index = 0;
-  /** Steps (counted from 1) passed with Next although they asked for an action. */
-  const skipped: number[] = [];
+  let index = options.start?.completedSteps ?? 0;
+  /** Steps (counted from 1) passed without the user acting on their element. */
+  const skipped: number[] = [...(options.start?.skippedSteps ?? [])];
   const reached = (): Omit<GuideEnd, 'outcome'> => ({ completedSteps: index, ...(skipped.length > 0 ? { skippedSteps: [...skipped] } : {}) });
   /** Whether the current step's element has been shown at least once. */
   let shown = false;
@@ -107,6 +111,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
     shown = false;
     missingSince = undefined;
     current = undefined;
+    options.onProgress?.(reached());
     if (index >= steps.length) finish({ outcome: 'completed', ...reached() });
     else tick();
   };
@@ -166,8 +171,17 @@ export function runGuide(options: GuideOptions): RunningGuide {
   return {
     done,
     action(element) {
-      if (ended || !current || steps[index]!.expect === 'ack') return;
-      if (current === element || current.contains(element)) advance();
+      if (ended) return;
+      // The current step, or a later one the user got to first: the steps in between count as skipped.
+      for (let at = index; at < steps.length; at++) {
+        if (steps[at]!.expect === 'ack') continue;
+        const target = at === index ? current : options.find(at);
+        if (!target || (target !== element && !target.contains(element))) continue;
+        for (let passed = index; passed < at; passed++) if (steps[passed]!.expect !== 'ack') skipped.push(passed + 1);
+        index = at;
+        advance();
+        return;
+      }
     },
     stop() {
       finish(undefined);

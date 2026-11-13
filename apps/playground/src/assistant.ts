@@ -3,7 +3,7 @@
  * The debug section shows what the agent gets: the actions waiting to be sent, and the last
  * question as the model reads it.
  */
-import type { Bridge, TimelineEntry } from '@doccue/bridge';
+import type { Bridge, Item, TimelineEntry } from '@doccue/bridge';
 import { escapeHtml } from './app.js';
 
 /** Just enough Markdown for chat answers: code blocks, inline code, bold, lists, paragraphs. */
@@ -37,6 +37,16 @@ function describe(entry: TimelineEntry): string {
   const what = action ? `${action.type} ${action.target?.role ?? ''} ${JSON.stringify(action.target?.name ?? '')}${action.value === undefined ? '' : ` = ${JSON.stringify(action.value)}`}` : '';
   const caused = effects.map((effect) => ('text' in effect ? `${effect.type} ${JSON.stringify(effect.text)}` : effect.type)).join(', ');
   return `${time} ${what}${what && caused ? ' → ' : ''}${caused}`;
+}
+
+/** The text of a model item. Its messages are the backend's business; the demo peeks to redraw the chat after a reload. */
+function answerText(item: Extract<Item, { type: 'model' }>): string {
+  const messages = item.messages as Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+  return messages
+    .filter((message) => message.role === 'assistant')
+    .flatMap((message) => message.content ?? [])
+    .map((part) => (part.type === 'text' ? (part.text ?? '') : ''))
+    .join('');
 }
 
 export function startAssistant(bridge: Bridge, user: Record<string, unknown>): void {
@@ -108,8 +118,6 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     textarea.value = '';
     finish('已停止');
     add('user', escapeHtml(question));
-    stop.hidden = false;
-    panel.dataset.busy = String(Number(panel.dataset.busy ?? 0) + 1);
     try {
       const asked = bridge.ask(question);
       void showContext();
@@ -117,13 +125,21 @@ export function startAssistant(bridge: Bridge, user: Record<string, unknown>): v
     } catch (error) {
       add('system', escapeHtml(error instanceof Error ? error.message : String(error)));
     }
-    // The exchange is over (answered, stopped or replaced by a newer question).
-    panel.dataset.busy = String(Number(panel.dataset.busy) - 1);
-    if (panel.dataset.busy === '0') {
-      finish('已停止');
-      stop.hidden = true;
-    }
   });
+  // Busy while an answer is on its way or a guide is on screen, also when a reload interrupted one.
+  bridge.on('state', (event) => {
+    stop.hidden = !event.busy;
+    if (!event.busy) finish('已停止');
+  });
+  stop.hidden = !bridge.busy();
+
+  // After a full page load: redraw what was said so far.
+  for (const item of bridge.conversation()) {
+    if (item.type === 'user') add('user', escapeHtml(item.text));
+    else if (item.type === 'model') answerText(item) && add('assistant', markdown(answerText(item))).classList.add('done');
+    else add('note', `引导结束：${item.result.outcome}，完成 ${item.result.completedSteps} 步`);
+  }
+  if (bridge.conversation().length > 0) void showContext();
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();

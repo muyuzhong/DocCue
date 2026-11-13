@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "tsx --conditions=source server.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "e2e": "tsx --conditions=source e2e/demo.ts"
+    "e2e": "tsx --conditions=source e2e/demo.ts",
+    "journeys": "tsx --conditions=source e2e/journeys.ts"
   },
   "dependencies": {
     "@doccue/bridge": "workspace:*",

@@ -25,6 +25,8 @@ export interface RecorderOptions {
 export interface Recorder {
   /** Finish the action in progress now instead of waiting for its result window. */
   flush(): void;
+  /** Whether requests the page made are still on their way. */
+  busy(): boolean;
   stop(): void;
 }
 
@@ -45,6 +47,8 @@ export function createRecorder(options: RecorderOptions): Recorder {
   const view = document.defaultView as (Window & typeof globalThis) | null;
   const cleanups: Array<() => void> = [];
   let pending: Pending | undefined;
+  /** Requests of the page that have not come back yet. */
+  let inflight = 0;
 
   const finish = () => {
     if (!pending) return;
@@ -254,6 +258,7 @@ export function createRecorder(options: RecorderOptions): Recorder {
         const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         const method = (init?.method ?? (typeof input === 'object' && 'method' in input ? input.method : 'GET')).toUpperCase();
         if (options.skipUrl(url)) return originalFetch.call(this, input, init);
+        inflight++;
         try {
           const response = await originalFetch.call(this, input, init);
           if (!response.ok) {
@@ -267,6 +272,8 @@ export function createRecorder(options: RecorderOptions): Recorder {
         } catch (error) {
           if ((error as { name?: string }).name !== 'AbortError') failed(method, url, undefined, error instanceof Error ? error.message : String(error));
           throw error;
+        } finally {
+          inflight--;
         }
       } as typeof fetch;
       cleanups.push(() => {
@@ -286,7 +293,9 @@ export function createRecorder(options: RecorderOptions): Recorder {
       XHR.prototype.send = function (this: XMLHttpRequest, body?: Document | XMLHttpRequestBodyInit | null) {
         const info = meta.get(this);
         if (info && !options.skipUrl(info.url)) {
+          inflight++;
           this.addEventListener('loadend', () => {
+            inflight--;
             if (this.status === 0) failed(info.method, info.url, undefined, '');
             else if (this.status >= 400) {
               const text = this.responseType === '' || this.responseType === 'text' ? this.responseText : '';
@@ -305,6 +314,7 @@ export function createRecorder(options: RecorderOptions): Recorder {
 
   return {
     flush: finish,
+    busy: () => inflight > 0,
     stop() {
       finish();
       for (const cleanup of cleanups.splice(0)) cleanup();
