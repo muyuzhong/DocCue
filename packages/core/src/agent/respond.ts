@@ -3,19 +3,22 @@
  * what to stream back. Nothing is kept between requests; the frontend holds the conversation and
  * sends it in full every time.
  */
-import type { GuideStep, StreamEvent, TurnRequest } from '@doccue/protocol';
+import type { StreamEvent, TurnRequest } from '@doccue/protocol';
 import { describeError, safeLog, withModelLog, type Logger } from '../log/log.js';
 import { runTurn } from '../loop/run-turn.js';
 import type { Tool } from '../loop/types.js';
 import { ModelError } from '../model/errors.js';
 import type { ModelAdapter } from '../model/types.js';
+import { docsPrompt, docsTools, type DocsProvider } from '../docs/docs.js';
 import { buildSystemPrompt, renderConversation } from '../render/render.js';
-import { GUIDE_TOOL, guideTool, latestScreen } from './guide.js';
+import { GUIDE_TOOL, guideTool, latestScreen, readSteps } from './guide.js';
 
 export interface AgentOptions {
   model: ModelAdapter;
   /** The product-specific part of the system prompt: what the app is, tone, rules. */
   instructions?: string;
+  /** The product documentation: `markdownDocs(dir)` from `@doccue/core/node`, `createDocs(files)`, or your own search. */
+  docs?: DocsProvider;
   /** Extra tools that run on the backend. The `guide` tool is always there. */
   tools?: readonly Tool[];
   /** Model calls per request. Defaults to 10. */
@@ -36,9 +39,9 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
 
   const events = runTurn({
     model,
-    system: buildSystemPrompt(options.instructions),
+    system: buildSystemPrompt(options.instructions, options.docs ? [docsPrompt(options.docs)] : []),
     messages: renderConversation(request),
-    tools: [...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
+    tools: [...(options.docs ? docsTools(options.docs) : []), ...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
     ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
     ...(signal ? { signal } : {}),
@@ -70,8 +73,10 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
         const item = { type: 'model' as const, messages: event.messages };
         if (event.reason === 'page_tool') {
           // The frontend runs the guide and sends its result with the next request.
+          // The loop only hands over calls that passed validation, so the steps are readable.
           const call = event.pageCall!;
-          yield { type: 'guide', callId: call.id, steps: (call.args as { steps: GuideStep[] }).steps };
+          const read = readSteps(call.args);
+          yield { type: 'guide', callId: call.id, steps: 'steps' in read ? read.steps : [] };
           yield { type: 'end', reason: 'guide', item, usage: event.usage };
         } else {
           yield { type: 'end', reason: event.reason, item, usage: event.usage, ...(error ? { error } : {}) };

@@ -12,7 +12,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { setDefaultAutoSelectFamilyAttemptTimeout, type AddressInfo } from 'node:net';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHandler, createModelFromEnv, renderConversation, toJsonLine, withRetry, type TurnRequest } from '@doccue/core';
-import { toNodeHandler } from '@doccue/core/node';
+import { markdownDocs, toNodeHandler } from '@doccue/core/node';
 import { createServer as createViteServer, defaultClientConditions } from 'vite';
 
 // Node gives each address of a host only 250 ms to connect before trying the next one; on a slow
@@ -22,9 +22,10 @@ setDefaultAutoSelectFamilyAttemptTimeout(2000);
 const APP_DIR = fileURLToPath(new URL('.', import.meta.url));
 const ENV_FILE = new URL('../../.env', import.meta.url);
 
-const INSTRUCTIONS = `你是「数据平台」的应用内助手。数据平台用来接入和管理数据库数据源：在「数据源」页面查看和删除数据源，在「新建数据源」页面填写名称、数据库类型、主机地址、端口、用户名和密码，先点「测试连接」，连接成功后才能「保存」。
-各数据库的默认端口：MySQL 3306，PostgreSQL 5432，ClickHouse 8123。主机地址只填 IP 或域名，不带协议和端口。
+// What the product is and how it works lives in docs/; the instructions only set the role.
+const INSTRUCTIONS = `你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。
 用户遇到问题时，结合他的操作、报错和当前界面，直接说明原因，并在页面上指给他看下一步该怎么做。`;
+const DOCS_DIR = fileURLToPath(new URL('docs/', import.meta.url));
 
 // --- mock backend -------------------------------------------------------------------------------
 
@@ -107,6 +108,9 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
     createHandler({
       model: withRetry(model),
       instructions: INSTRUCTIONS,
+      // These docs are small enough to go into the system prompt whole. Real products' docs rarely
+      // are, so the playground looks things up through search_docs / read_doc, as most hosts will.
+      docs: await markdownDocs(DOCS_DIR, { inlineMaxChars: 0 }),
       basePath: '/doccue',
       logger: (record) => appendFileSync(logFile, `${toJsonLine(record)}\n`),
     }),

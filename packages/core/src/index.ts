@@ -3,6 +3,7 @@ export { PROTOCOL_VERSION } from '@doccue/protocol';
 export * from './model/index.js';
 export * from './loop/index.js';
 export * from './render/index.js';
+export * from './docs/index.js';
 export * from './protocol/index.js';
 export * from './log/index.js';
 export { respond, type AgentOptions } from './agent/respond.js';

@@ -2,7 +2,7 @@
 
 > *Turn static docs into context-aware in-app cues.*
 >
-> **状态**：第 1 步（换骨架）、第 2 步（单屏引导）、第 3 步（跨屏引导）已完成，进度见第十一节和 `project_structure.md`。
+> **状态**：第 1 至 4 步（换骨架、单屏引导、跨屏引导、文档）已完成，进度见第十一节和 `project_structure.md`。
 > v3.0 相对 v2.4 是重写，差异见文末。
 
 ## 一、定位
@@ -350,13 +350,13 @@ cue.reset();                        // 开始新对话
 `createHandler()` 返回一个标准的 `(Request) => Promise<Response>`，可以挂在任何支持 Fetch API 的运行时上；另附 Node / Express / Connect 的适配。鉴权、限流由宿主套在外面。
 
 ```ts
-import { createHandler, createAnthropic, markdownDocs } from '@doccue/core';
-import { toNodeHandler } from '@doccue/core/node';
+import { createHandler, createAnthropic } from '@doccue/core';
+import { markdownDocs, toNodeHandler } from '@doccue/core/node';
 
 const handler = createHandler({
   model: createAnthropic({ apiKey, model }),
   instructions: '你是「数据平台」的应用内助手 ...',
-  docs: markdownDocs('./docs'),
+  docs: await markdownDocs('./docs'),
 });
 app.use('/doccue', toNodeHandler(handler));
 ```
@@ -416,15 +416,19 @@ v1 没有 `get_screen` / `get_timeline` 这类按需查看的工具：引导本�
 
 ```ts
 interface DocsProvider {
-  toc(): string;                                   // 目录，放进系统提示词
-  search(query: string): Promise<DocHit[]>;
-  read(id: string): Promise<string>;
+  toc(): string;                                   // 目录，放进系统提示词；每次请求要一样
+  search(query: string): Promise<DocHit[]>;        // { id, title, snippet }
+  read(id: string): Promise<string | undefined>;   // 一节全文，含它的小节
+  inline?(): string | undefined;                   // 文档够小时的全文，放进系统提示词代替工具
 }
 ```
 
-- 默认实现 `markdownDocs(dir)`：读一个目录下的 Markdown，按标题切分，关键词匹配打分。不用向量库。
-- 文档总量小于阈值时，整份放进系统提示词，不提供搜索工具。这是效果最好也最简单的做法。
-- 宿主可以传入自己的实现（接已有的搜索服务）。
+- **默认实现**：`createDocs(files)` 在主入口，任何运行时都能用；`markdownDocs(dir)` 在 `@doccue/core/node`，读一个目录下的全部 Markdown（含子目录），启动时读一次。
+- **切分**：按标题切成小节，代码块里的 `#` 不算标题；第一个标题之前的文字归到以文件名命名的一节。每节的 ID 是"文件路径#标题"，同名的加序号。目录列出三级以内的标题和 ID。
+- **检索**：关键词打分，不用向量库。中文、日文、韩文按相邻两个字切分，其余按单词；标题里命中的权重是正文的 3 倍，越少见的词权重越高。返回前 5 节，每节带 ID、所在位置（如"新建数据源 › 端口"）和命中处附近约 200 字。
+- **小文档整份进提示词**：全文不超过阈值（默认 12000 字符）时整份放进系统提示词，不提供检索工具，这是效果最好也最简单的做法。宿主可以把阈值设为 0，始终走检索。
+- **提示词**：要求模型遇到关于产品怎么用的问题（字段含义、规则和限制、怎么做、报错是什么意思）先查文档再回答，不要猜；文档和界面不一致时以界面为准。
+- **自定义实现**：宿主可以传入自己的 `DocsProvider`，接已有的搜索服务。
 
 ### 6. 模型
 
@@ -488,7 +492,7 @@ interface DocsProvider {
 1. **换骨架** ✅。协议包、无状态接口、前端对话驱动、结构化感知与后端渲染。答疑能力与重构前持平，已在真实浏览器 + 真实模型上验证。首轮只做了主干，暂未处理：请求的大小上限与裁剪、对话记录的长度上限、请求体大小限制。
 2. **单屏引导** ✅。定位、聚光灯和气泡、步骤推进、`guide` 工具、单步评测场景。在 playground 里问"为什么连不上"，agent 说明原因、指向出错的输入框，用户改完并重新测试后，它确认连上并停下；已在真实浏览器 + 真实模型上验证。首轮暂未处理：气泡避开相邻内容（现在只在目标的下方或上方）。
 3. **跨屏引导** ✅。段结束后续接、整页刷新后恢复、提前做了后面步骤时跳过去、页面稳定的判定、多步评测场景。从仪表盘说"我想新建一个 MySQL 数据源"，被引导着点导航、填表单、测试、保存，模型看到列表里出现新数据源后确认完成；3 个多步场景在真实浏览器 + 真实模型上全部通过。首轮暂未处理：指向分组（表单、导航这类没有定位符的节点）的步骤在刷新后找不回，会以找不到目标回到模型；恢复的那一轮请求失败时，宿主只收到"不忙了"，没有错误事件；真正的多页应用没有专门测，playground 是单页应用，用整页刷新模拟。
-4. **文档**。`markdownDocs`、`search_docs` / `read_doc`、小文档整份进提示词。
+4. **文档** ✅。`createDocs` / `markdownDocs`、`search_docs` / `read_doc`、小文档整份进提示词。playground 的产品知识已从 `instructions` 挪进一套模拟文档（`apps/playground/docs/`），用户问"删除后能恢复吗""连接失败是什么原因"，agent 查文档后按文档回答；已用真实模型验证两种模式。首轮暂未处理：检索只是关键词匹配，没有同义词和词形变化；很长的一节读出来不截断；文档很多时目录本身会很长；文档之间的链接不解析。
 5. **自带问答窗**与语言包。
 
 ### 现有代码的去留

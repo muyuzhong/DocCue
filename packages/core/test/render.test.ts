@@ -140,3 +140,15 @@ describe('buildSystemPrompt', () => {
     expect(buildSystemPrompt('  你是「数据平台」的助手。 ')).toMatch(/^你是「数据平台」的助手。\n\nEach user message starts with a <context> block/);
   });
 });
+
+describe('readSteps', () => {
+  it('reads the steps of a guide call, also when the model sent them as a JSON string', async () => {
+    const { readSteps } = await import('../src/agent/guide.js');
+    const steps = [{ target: 9, text: '去掉 http://' }];
+    expect(readSteps({ steps })).toEqual({ steps });
+    expect(readSteps({ steps: JSON.stringify(steps) })).toEqual({ steps });
+    expect(readSteps({ steps: 'step one' })).toEqual({ problem: 'steps: send a JSON array of {"target", "text"} objects, not a string' });
+    expect(readSteps({ steps: [] })).toEqual({ problem: 'steps: send a non-empty JSON array of {"target", "text"} objects' });
+    expect(readSteps({ steps: [{ target: '9', text: 'x' }] })).toEqual({ problem: 'steps[0].target: expected the number of an element, like 3' });
+  });
+});

@@ -8,7 +8,7 @@
 - **只在被问到时出现**：不主动打扰。
 - **接入简单**：前端加一个包，后端挂一个接口。登录鉴权、数据库、部署这些你的系统里本来就有的能力，DocCue 不重复造。
 
-> **当前状态**：答疑和可视引导（包括跨页面、经过弹窗、整页刷新后继续）已经可用，并在真实浏览器 + 真实模型上端到端验证过。文档检索、自带问答窗还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
+> **当前状态**：答疑、可视引导（包括跨页面、经过弹窗、整页刷新后继续）和产品文档检索已经可用，并在真实浏览器 + 真实模型上端到端验证过。自带问答窗还在开发中，尚未发布到 npm。详见[路线图](#路线图)。
 
 ## 它怎么知道用户做了什么
 
@@ -91,11 +91,12 @@ playground 是一个模拟的「数据平台」，右侧是问答框。试试：
 
 ```ts
 import { createHandler, createModelFromEnv, withRetry } from '@doccue/core';
-import { toNodeHandler } from '@doccue/core/node';
+import { markdownDocs, toNodeHandler } from '@doccue/core/node';
 
 const handler = createHandler({
   model: withRetry(createModelFromEnv(process.env)),
   instructions: '你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。',
+  docs: await markdownDocs('./docs'),   // 你的产品文档（Markdown），可选
   basePath: '/doccue',
 });
 
@@ -143,7 +144,8 @@ agent 在后端，但它要用的东西（界面、用户的操作、以后的�
 | :--- | :--- |
 | 感知：记录操作及其后果，生成界面快照 | 渲染：把对话记录转成给模型的消息 |
 | 引导：聚光灯、气泡、步骤推进 | 循环：调模型，执行后端工具，遇到 `guide` 就交给前端 |
-| 对话：保存记录、发请求、执行引导并回传结果 | 模型适配、日志与回放 |
+| 对话：保存记录、发请求、执行引导并回传结果 | 文档：检索和阅读产品文档 |
+| | 模型适配、日志与回放 |
 
 两边交换的数据定义在 `@doccue/protocol`。完整设计见 [architecture_design.md](architecture_design.md)，代码结构和进度见 [project_structure.md](project_structure.md)。
 
@@ -156,6 +158,7 @@ packages/core/           后端
     model/               模型适配器、流式解析、重试
     loop/                核心循环：调模型 → 执行工具 → 再调模型
     render/              把对话记录渲染成模型消息
+    docs/                产品文档：切分、检索、search_docs / read_doc
     agent/               处理一次请求
     protocol/            请求校验
     server/              HTTP 处理函数、Node 适配
@@ -171,7 +174,7 @@ apps/evals/              评测场景
 - [x] **换骨架**：协议、无状态接口、前端对话驱动、结构化感知。答疑可用，已在真实浏览器里端到端验证。
 - [x] **单屏引导**：在页面上高亮控件并用气泡说明，用户做完一步自动到下一步；结果回到模型，由它确认或接着引导。
 - [x] **跨屏引导**：换页、开弹窗后接着引导，整页刷新后恢复，用户走偏或提前做了后面的步骤时跟上。
-- [ ] **文档检索**：模型按需搜索和阅读你的产品文档。
+- [x] **文档检索**：模型按需搜索和阅读你的产品文档；文档小时整份放进提示词。也可以接你自己的搜索服务。
 - [ ] **自带问答窗**与语言包。
 
 以后再做：按需截图（图表、画布）、预置的首次引导、接入 Skill、主动提示、脱敏。

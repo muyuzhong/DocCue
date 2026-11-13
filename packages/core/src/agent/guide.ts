@@ -34,6 +34,28 @@ export function latestScreen(conversation: readonly Item[]): Screen | undefined 
   return undefined;
 }
 
+/**
+ * The steps of a `guide` call. Models sometimes send the array as a JSON string; that is read as
+ * the array it spells. Anything else that is not a list of steps comes back as a problem for the
+ * model, saying what was wrong.
+ */
+export function readSteps(args: unknown): { steps: GuideStep[] } | { problem: string } {
+  let steps = (args as { steps?: unknown }).steps;
+  if (typeof steps === 'string') {
+    try {
+      steps = JSON.parse(steps);
+    } catch {
+      return { problem: 'steps: send a JSON array of {"target", "text"} objects, not a string' };
+    }
+  }
+  if (!Array.isArray(steps) || steps.length === 0) return { problem: 'steps: send a non-empty JSON array of {"target", "text"} objects' };
+  for (const [index, step] of (steps as Array<Partial<GuideStep>>).entries()) {
+    if (typeof step?.text !== 'string' || !step.text) return { problem: `steps[${index}].text: expected a non-empty string` };
+    if (typeof step.target !== 'number') return { problem: `steps[${index}].target: expected the number of an element, like 3` };
+  }
+  return { steps: steps as GuideStep[] };
+}
+
 /** The tool for one request. Calls that point at elements not on `screen` are sent back to the model. */
 export function guideTool(screen: Screen | undefined): Tool {
   const refs = refsOf(screen?.nodes ?? []);
@@ -60,14 +82,10 @@ export function guideTool(screen: Screen | undefined): Tool {
       required: ['steps'],
     },
     validate(args) {
-      const steps = (args as { steps?: unknown }).steps;
-      if (!Array.isArray(steps) || steps.length === 0) return 'steps: expected a non-empty array';
-      for (const [index, step] of (steps as Array<Partial<GuideStep>>).entries()) {
-        if (typeof step?.text !== 'string' || !step.text) return `steps[${index}].text: expected a string`;
-        if (typeof step.target !== 'number' || !refs.has(step.target)) {
-          return `steps[${index}].target: there is no element [${String(step.target)}] on the latest screen`;
-        }
-      }
+      const read = readSteps(args);
+      if ('problem' in read) return read.problem;
+      const missing = read.steps.findIndex((step) => !refs.has(step.target as number));
+      if (missing >= 0) return `steps[${missing}].target: there is no element [${String(read.steps[missing]!.target)}] on the latest screen`;
       return undefined;
     },
   };

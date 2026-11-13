@@ -20,8 +20,9 @@ const GUIDE_GUIDE = `You cannot operate the app; the user does. When the answer 
 /** Recent actions shown per context block. */
 const MAX_ACTIONS = 20;
 
-export function buildSystemPrompt(instructions: string = DEFAULT_INSTRUCTIONS): string {
-  return `${instructions.trim()}\n\n${CONTEXT_GUIDE}\n\n${GUIDE_GUIDE}`;
+/** The developer's instructions, how to read the context and when to guide, then any `extra` parts (e.g. the docs). */
+export function buildSystemPrompt(instructions: string = DEFAULT_INSTRUCTIONS, extra: readonly string[] = []): string {
+  return [instructions.trim(), CONTEXT_GUIDE, GUIDE_GUIDE, ...extra].join('\n\n');
 }
 
 const quote = (text: string) => JSON.stringify(text);
