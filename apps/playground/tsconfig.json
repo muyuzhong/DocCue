@@ -1,9 +1,22 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "lib": ["ES2023", "DOM", "DOM.Iterable"],
-    "types": ["node", "vite/client"],
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node",
+      "vite/client"
+    ],
     "noEmit": true
   },
-  "include": ["server.ts", "src", "e2e"]
+  "include": [
+    "server.ts",
+    "src",
+    "e2e",
+    "test",
+    "vitest.config.ts"
+  ]
 }

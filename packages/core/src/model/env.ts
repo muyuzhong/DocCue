@@ -7,14 +7,15 @@ export type ModelEnv = Record<string, string | undefined>;
 /**
  * Builds a model adapter from environment-style settings (e.g. `process.env`):
  * DOCCUE_PROVIDER (anthropic | openai), DOCCUE_MODEL, DOCCUE_BASE_URL, DOCCUE_EFFORT,
- * ANTHROPIC_API_KEY, OPENAI_API_KEY. Empty values count as unset. Throws when something
- * required is missing.
+ * DOCCUE_MAX_TOKENS, ANTHROPIC_API_KEY, OPENAI_API_KEY. Empty values count as unset. Throws when
+ * something required is missing.
  */
 export function createModelFromEnv(env: ModelEnv): ModelAdapter {
   const get = (name: string) => env[name]?.trim() || undefined;
   const provider = get('DOCCUE_PROVIDER') ?? (get('ANTHROPIC_API_KEY') ? 'anthropic' : get('OPENAI_API_KEY') || get('DOCCUE_BASE_URL') ? 'openai' : undefined);
   const baseURL = get('DOCCUE_BASE_URL');
-  const base = baseURL ? { baseURL } : {};
+  const maxTokens = Number(get('DOCCUE_MAX_TOKENS'));
+  const base = { ...(baseURL ? { baseURL } : {}), ...(maxTokens > 0 ? { maxTokens } : {}) };
   if (provider === 'anthropic') {
     const apiKey = get('ANTHROPIC_API_KEY');
     if (!apiKey) throw new Error('缺少 ANTHROPIC_API_KEY');

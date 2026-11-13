@@ -82,7 +82,8 @@ playground 是一个模拟的「数据平台」，右侧是问答框。试试：
 | `pnpm try [--tool] "问题"` | 跑单轮；`--tool` 挂一个查时间的演示工具，测多步循环 |
 | `pnpm chat` | 多轮对话，日志写到 `packages/core/.logs/` |
 | `pnpm replay <日志> [编号]` | 列出日志里的模型调用；带编号则把那次调用原样重发，对比前后两次回答 |
-| `pnpm test` / `pnpm typecheck` / `pnpm build` | 测试 / 类型检查 / 构建 |
+| `pnpm test` | 测试。不用假模型：涉及模型的测试调 `.env` 里的真实模型，前端在本机 Chrome 里跑 playground |
+| `pnpm typecheck` / `pnpm build` | 类型检查 / 构建 |
 
 ## 作为库使用
 

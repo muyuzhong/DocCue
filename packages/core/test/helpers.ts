@@ -1,5 +1,5 @@
 import type { FetchLike } from '../src/model/http.js';
-import type { AssistantContent, ModelAdapter, ModelDone, ModelEvent, ModelRequest, StopReason } from '../src/model/types.js';
+import type { AssistantContent, ModelDone, StopReason } from '../src/model/types.js';
 
 /** A streaming SSE response, cut into small chunks to exercise split lines and split UTF-8. */
 export function sseResponse(events: Array<{ event?: string; data: unknown }>, chunkSize = 7): Response {
@@ -53,32 +53,4 @@ export function done(content: AssistantContent[], stopReason: StopReason = 'end'
     usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
     ...extra,
   };
-}
-
-export function toolCall(id: string, name: string, args: unknown): AssistantContent {
-  return { type: 'tool_call', id, name, args, rawArgs: args === undefined ? '{bad' : JSON.stringify(args) };
-}
-
-type Step = (request: ModelRequest) => AsyncIterable<ModelEvent> | ModelEvent[];
-
-/** A scripted model: each call to `stream` plays the next step. Requests are recorded. */
-export function fakeModel(...steps: Step[]): ModelAdapter & { requests: ModelRequest[] } {
-  const requests: ModelRequest[] = [];
-  return {
-    provider: 'fake',
-    model: 'fake-1',
-    requests,
-    async *stream(request) {
-      requests.push({ ...request, messages: [...request.messages] });
-      const step = steps.shift();
-      if (!step) throw new Error('fakeModel: no step left');
-      yield* step(request);
-    },
-  };
-}
-
-/** Text deltas followed by a final `done` with that text. */
-export function reply(text: string, extra: AssistantContent[] = [], stopReason: StopReason = 'end'): ModelEvent[] {
-  const deltas: ModelEvent[] = [...text].map((ch) => ({ type: 'text', delta: ch }));
-  return [...deltas, done([...(text ? [{ type: 'text' as const, text }] : []), ...extra], stopReason)];
 }

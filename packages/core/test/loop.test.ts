@@ -1,236 +1,233 @@
 import { describe, expect, it } from 'vitest';
+import { withModelLog, type ModelCallRecord } from '../src/log/log.js';
 import { runTurn, runTurnToEnd } from '../src/loop/run-turn.js';
-import type { Tool } from '../src/loop/types.js';
+import type { LoopEvent, Tool, TurnEnd } from '../src/loop/types.js';
+import { createAnthropic } from '../src/model/anthropic.js';
 import { ModelError } from '../src/model/errors.js';
-import type { Message, ModelEvent } from '../src/model/types.js';
-import { collect, done, fakeModel, reply, toolCall } from './helpers.js';
+import type { Message, ToolResult } from '../src/model/types.js';
+import { collect, mockFetch, sseResponse } from './helpers.js';
+import { realModel, rejectedModel } from './model.js';
 
 const user = (text: string): Message => ({ role: 'user', content: text });
+const textOf = (messages: readonly Message[]) =>
+  messages.flatMap((message) => (message.role === 'assistant' ? message.content : [])).map((part) => (part.type === 'text' ? part.text : '')).join('');
+const results = (events: LoopEvent[]): ToolResult[] => events.flatMap((event) => (event.type === 'tool_result' ? [event.result] : []));
+const endOf = (events: LoopEvent[]) => events.at(-1) as TurnEnd;
 
-function tool(name: string, execute: Tool['execute'], required: string[] = []): Tool {
-  return { name, description: name, parameters: { type: 'object', properties: {}, required }, execute };
+/** A tool that returns a word only it knows, and counts its calls. */
+function secretWord(): Tool & { calls: number } {
+  return {
+    name: 'get_secret_word',
+    description: 'Returns the secret word of the day.',
+    parameters: { type: 'object', properties: {} },
+    calls: 0,
+    async execute() {
+      this.calls++;
+      return 'pineapple';
+    },
+  };
 }
 
-describe('runTurn', () => {
-  it('answers in one step when the model calls no tools', async () => {
-    const model = fakeModel(() => reply('hi'));
-    const events = await collect(runTurn({ model, system: 'sys', messages: [user('hello')] }));
-    expect(events.map((e) => e.type)).toEqual(['step_start', 'text', 'text', 'step_end', 'turn_end']);
-    const end = events.at(-1);
-    expect(end).toMatchObject({ type: 'turn_end', reason: 'completed', messages: [{ role: 'assistant', content: [{ type: 'text', text: 'hi' }] }] });
-    expect(model.requests[0]).toMatchObject({ system: 'sys', messages: [user('hello')] });
-    expect(model.requests[0]).not.toHaveProperty('tools');
-  });
-
-  it('runs tools, sends results back and continues until the answer', async () => {
-    const seen: unknown[] = [];
-    const getTime = tool('get_time', async (args) => {
-      seen.push(args);
-      return '12:00';
-    });
-    const model = fakeModel(
-      () => reply('checking', [toolCall('c1', 'get_time', { tz: 'UTC' })], 'tool_use'),
-      () => reply('It is 12:00'),
-    );
-    const { text, end } = await runTurnToEnd({ model, messages: [user('time?')], tools: [getTime] });
-
-    expect(seen).toEqual([{ tz: 'UTC' }]);
-    expect(text).toBe('checkingIt is 12:00');
+describe('runTurn with the real model', () => {
+  it('answers in one step when no tool is needed', async () => {
+    const events = await collect(runTurn({ model: realModel(), system: 'Reply with one word.', messages: [user('What colour is a clear daytime sky?')] }));
+    expect(events.filter((event) => event.type === 'step_start')).toHaveLength(1);
+    const end = endOf(events);
     expect(end.reason).toBe('completed');
-    expect(end.usage).toEqual({ inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheWriteTokens: 0 });
-    expect(end.messages.map((m) => m.role)).toEqual(['assistant', 'tool', 'assistant']);
-    expect(end.messages[1]).toEqual({ role: 'tool', results: [{ callId: 'c1', content: '12:00' }] });
-    expect(model.requests[0]!.tools).toEqual([{ name: 'get_time', description: 'get_time', parameters: getTime.parameters }]);
-    // The second call sees the whole transcript, append-only.
-    expect(model.requests[1]!.messages).toEqual([user('time?'), ...end.messages.slice(0, 2)]);
+    expect(end.messages.map((message) => message.role)).toEqual(['assistant']);
+    expect(textOf(end.messages)).toMatch(/blue/i);
+    expect(end.usage.inputTokens).toBeGreaterThan(0);
   });
 
-  it('runs parallel calls and reports unknown tools, bad JSON, bad args and tool errors as results', async () => {
-    const model = fakeModel(
-      () => [
-        done(
-          [
-            toolCall('a', 'slow', {}),
-            toolCall('b', 'missing', {}),
-            toolCall('c', 'slow', undefined),
-            toolCall('d', 'needs_id', {}),
-            toolCall('e', 'broken', {}),
-          ],
-          'tool_use',
-        ),
-      ],
-      () => reply('done'),
-    );
-    const tools = [
-      tool('slow', async () => {
-        await new Promise((r) => setTimeout(r, 5));
-        return 'slow ok';
-      }),
-      tool('needs_id', async () => 'never', ['id']),
-      tool('broken', async () => {
-        throw new Error('disk full');
-      }),
-    ];
-    const { end } = await runTurnToEnd({ model, messages: [user('go')], tools });
-    const results = (end.messages[1] as Extract<Message, { role: 'tool' }>).results;
-    expect(results.map((r) => r.callId)).toEqual(['a', 'b', 'c', 'd', 'e']);
-    expect(results[0]).toEqual({ callId: 'a', content: 'slow ok' });
-    expect(results[1]).toMatchObject({ isError: true, content: 'Unknown tool "missing".' });
-    expect(results[2]).toMatchObject({ isError: true, content: expect.stringContaining('INVALID_JSON') });
-    expect(results[3]).toMatchObject({ isError: true, content: 'Invalid arguments for needs_id: missing id' });
-    expect(results[4]).toMatchObject({ isError: true, content: 'Tool error: disk full' });
+  it('runs the tools the model asks for and answers with their results', async () => {
+    const tool = secretWord();
+    const { text, end } = await runTurnToEnd({ model: realModel(), messages: [user('Use get_secret_word and tell me the word it returns.')], tools: [tool] });
+    expect(tool.calls).toBeGreaterThanOrEqual(1);
     expect(end.reason).toBe('completed');
+    expect(end.messages.map((message) => message.role).slice(0, 2)).toEqual(['assistant', 'tool']);
+    expect(text).toMatch(/pineapple/i);
   });
 
-  it('stops at maxSteps', async () => {
-    const loopForever = () => [done([toolCall(`c${Math.random()}`, 'noop', {})], 'tool_use')];
-    const model = fakeModel(loopForever, loopForever, loopForever);
-    const { end } = await runTurnToEnd({ model, messages: [user('go')], tools: [tool('noop', async () => 'ok')], maxSteps: 2 });
+  it('sends rejected arguments and tool failures back as results the model can read', async () => {
+    const lookup: Tool = {
+      name: 'lookup_order',
+      description: 'Looks up an order by its ID.',
+      parameters: { type: 'object', properties: { order_id: { type: 'string' } }, required: ['order_id'] },
+      // The user gives a bare number, so the first call is rejected and the error says what to send.
+      validate: (args) => (/^ORD-\d+$/.test(String((args as { order_id?: unknown }).order_id)) ? undefined : 'order_id: must look like ORD-123'),
+      async execute() {
+        throw new Error('the order database is offline');
+      },
+    };
+    const events = await collect(runTurn({ model: realModel(), messages: [user('Look up my order 42 with lookup_order and tell me what happened.')], tools: [lookup] }));
+    const contents = results(events).map((result) => [result.isError, result.content]);
+    expect(contents[0]).toEqual([true, 'Invalid arguments for lookup_order: order_id: must look like ORD-123']);
+    expect(contents).toContainEqual([true, 'Tool error: the order database is offline']);
+    expect(endOf(events).reason).toBe('completed');
+    expect(textOf(endOf(events).messages)).toMatch(/offline|unavailable|down/i);
+  });
+
+  it('stops after maxSteps', async () => {
+    const tool = secretWord();
+    const { end } = await runTurnToEnd({ model: realModel(), messages: [user('Use get_secret_word and tell me the word.')], tools: [tool], maxSteps: 1 });
     expect(end.reason).toBe('max_steps');
-    expect(model.requests.length).toBe(2);
-    expect(end.messages.map((m) => m.role)).toEqual(['assistant', 'tool', 'assistant', 'tool']);
+    expect(tool.calls).toBe(1);
+    expect(end.messages.map((message) => message.role)).toEqual(['assistant', 'tool']);
   });
 
-  it('on max_tokens keeps the text, drops cut-off tool calls and runs nothing', async () => {
-    let ran = false;
-    const model = fakeModel(() => reply('long answer', [toolCall('c1', 'noop', {})], 'max_tokens'));
-    const { end } = await runTurnToEnd({
-      model,
-      messages: [user('go')],
-      tools: [
-        tool('noop', async () => {
-          ran = true;
-          return 'ok';
-        }),
-      ],
-    });
-    expect(ran).toBe(false);
+  it('stops at the token limit', async () => {
+    const { end } = await runTurnToEnd({ model: realModel({ DOCCUE_MAX_TOKENS: '40' }), messages: [user('Write a 500-word essay on the history of bridges.')] });
     expect(end.reason).toBe('max_tokens');
-    expect(end.messages).toEqual([{ role: 'assistant', content: [{ type: 'text', text: 'long answer' }] }]);
-  });
-
-  it('on refusal discards the partial answer', async () => {
-    const model = fakeModel(() => [
-      { type: 'text', delta: 'part' },
-      done([{ type: 'text', text: 'part' }], 'refusal', { stopDetails: { category: 'cyber' } }),
-    ]);
-    const { end } = await runTurnToEnd({ model, messages: [user('q')] });
-    expect(end).toMatchObject({ reason: 'refusal', messages: [], stopDetails: { category: 'cyber' } });
+    expect(end.messages.flatMap((message) => (message.role === 'assistant' ? message.content : [])).some((part) => part.type === 'tool_call')).toBe(false);
   });
 
   it('when aborted mid-stream keeps the text the user already saw', async () => {
     const controller = new AbortController();
-    const model = fakeModel(async function* (request): AsyncGenerator<ModelEvent> {
-      yield { type: 'text', delta: '部分回答' };
-      await new Promise((_, reject) => request.signal!.addEventListener('abort', () => reject(request.signal!.reason)));
-    });
-    const events = [];
-    for await (const event of runTurn({ model, messages: [user('q')], signal: controller.signal })) {
-      events.push(event);
-      if (event.type === 'text') controller.abort();
+    let seen = '';
+    let end: TurnEnd | undefined;
+    for await (const event of runTurn({ model: realModel(), messages: [user('Count from 1 to 300, one number per line.')], signal: controller.signal })) {
+      if (event.type === 'text') {
+        seen += event.delta;
+        if (seen.length > 20) controller.abort();
+      }
+      if (event.type === 'turn_end') end = event;
     }
-    expect(events.at(-1)).toMatchObject({
-      type: 'turn_end',
-      reason: 'aborted',
-      messages: [{ role: 'assistant', content: [{ type: 'text', text: '部分回答' }] }],
-    });
+    expect(end?.reason).toBe('aborted');
+    expect(textOf(end!.messages)).toBe(seen);
   });
 
-  it('leaves no unhandled rejection when the stream fails after cancelling', async () => {
-    const controller = new AbortController();
-    const model = fakeModel(async function* (request): AsyncGenerator<ModelEvent> {
-      yield { type: 'text', delta: 'x' };
-      await new Promise((r) => setTimeout(r, 5));
-      throw request.signal!.reason;
-    });
-    const unhandled: unknown[] = [];
-    const onUnhandled = (reason: unknown) => unhandled.push(reason);
-    process.on('unhandledRejection', onUnhandled);
-    try {
-      for await (const event of runTurn({ model, messages: [user('q')], signal: controller.signal })) {
-        if (event.type === 'text') controller.abort();
-      }
-      await new Promise((r) => setTimeout(r, 30));
-    } finally {
-      process.off('unhandledRejection', onUnhandled);
-    }
-    expect(unhandled).toEqual([]);
-  });
-
-  it('closes the model stream when the caller stops reading', async () => {
-    let closed = false;
-    const model = fakeModel(async function* (): AsyncGenerator<ModelEvent> {
-      try {
-        yield { type: 'text', delta: 'a' };
-        yield { type: 'text', delta: 'b' };
-      } finally {
-        closed = true;
-      }
-    });
-    for await (const event of runTurn({ model, messages: [user('q')] })) {
+  it('closes the model request when the caller stops reading', async () => {
+    const records: ModelCallRecord[] = [];
+    const model = withModelLog(realModel(), (record) => records.push(record));
+    for await (const event of runTurn({ model, messages: [user('Count from 1 to 300, one number per line.')] })) {
       if (event.type === 'text') break;
     }
-    await new Promise((r) => setTimeout(r, 0));
-    expect(closed).toBe(true);
+    for (let waited = 0; records.length === 0 && waited < 5000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(records[0]?.error?.name).toBe('Stopped');
   });
 
-  it('on timeout during a tool still answers every tool call', async () => {
-    const model = fakeModel(() => [done([toolCall('c1', 'hang', {})], 'tool_use')]);
-    const hang = tool('hang', () => new Promise<string>(() => {}));
-    const { end } = await runTurnToEnd({ model, messages: [user('q')], tools: [hang], timeoutMs: 20 });
+  it('ends with timeout when the turn takes too long', async () => {
+    const { end } = await runTurnToEnd({ model: realModel(), messages: [user('Write a long story.')], timeoutMs: 100 });
     expect(end.reason).toBe('timeout');
-    expect(end.messages[1]).toMatchObject({ role: 'tool', results: [{ callId: 'c1', isError: true, content: expect.stringContaining('Cancelled') }] });
+  });
+
+  it('when cancelled while a tool runs, every tool call still gets a result', async () => {
+    const controller = new AbortController();
+    const slow: Tool = {
+      name: 'fetch_report',
+      description: 'Fetches the monthly report.',
+      parameters: { type: 'object', properties: {} },
+      execute: (_args, context) => {
+        setTimeout(() => controller.abort(), 50);
+        return new Promise((_, reject) => context.signal.addEventListener('abort', () => reject(new Error('aborted'))));
+      },
+    };
+    const { end } = await runTurnToEnd({ model: realModel(), messages: [user('Fetch the monthly report with fetch_report.')], tools: [slow], signal: controller.signal });
+    expect(end.reason).toBe('aborted');
+    const [call, answered] = end.messages.slice(-2);
+    const calls = call?.role === 'assistant' ? call.content.filter((part) => part.type === 'tool_call') : [];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(answered).toEqual({
+      role: 'tool',
+      results: calls.map((part) => ({ callId: (part as { id: string }).id, content: 'Cancelled: the turn was stopped while this tool was running.', isError: true })),
+    });
   });
 
   it('appends what beforeModelCall returns before each model call', async () => {
-    const model = fakeModel(
-      () => [done([toolCall('c1', 'noop', {})], 'tool_use')],
-      () => reply('ok'),
-    );
-    const { end } = await runTurnToEnd({
-      model,
-      messages: [user('q')],
-      tools: [tool('noop', async () => 'done')],
-      beforeModelCall: ({ step, transcript }) => [user(`[status step ${step}, ${transcript.length} messages]`)],
+    const steps: number[] = [];
+    const { text, end } = await runTurnToEnd({
+      model: realModel(),
+      messages: [user('What is the password? Reply with just the word.')],
+      beforeModelCall: ({ step }) => {
+        steps.push(step);
+        return step === 1 ? [user('(Note from the app: the password is "tulip".)')] : [];
+      },
     });
-    expect(model.requests[0]!.messages.at(-1)).toEqual(user('[status step 1, 1 messages]'));
-    expect(model.requests[1]!.messages.at(-1)).toEqual(user('[status step 2, 4 messages]'));
-    expect(end.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'user', 'assistant']);
+    expect(steps).toEqual([1]);
+    expect(end.messages[0]).toEqual(user('(Note from the app: the password is "tulip".)'));
+    expect(text).toMatch(/tulip/i);
   });
 
-  it('ends with reason error when the model fails', async () => {
-    const failure = new ModelError('overloaded', { provider: 'fake', retryable: true });
-    const model = fakeModel(() => {
-      throw failure;
-    });
-    const { end } = await runTurnToEnd({ model, messages: [user('q')] });
-    expect(end).toMatchObject({ reason: 'error', error: failure, messages: [] });
+  it('ends with reason error when the provider rejects the request', async () => {
+    const { end } = await runTurnToEnd({ model: rejectedModel(), messages: [user('hi')] });
+    expect(end.reason).toBe('error');
+    expect(end.error).toBeInstanceOf(ModelError);
+    expect((end.error as ModelError).retryable).toBe(false);
   });
 
   it('stops at a tool that runs in the page and hands the call over', async () => {
-    const lookup = tool('lookup', async () => 'found');
-    const guide: Tool = {
-      name: 'guide',
-      description: 'guide',
-      parameters: { type: 'object', properties: {}, required: ['steps'] },
-      validate: (args) => ((args as { steps: unknown[] }).steps.length > 0 ? undefined : 'steps: empty'),
+    const highlight: Tool = {
+      name: 'highlight',
+      description: "Highlights an element of the user's screen by its number.",
+      parameters: { type: 'object', properties: { target: { type: 'integer' } }, required: ['target'] },
     };
-    const model = fakeModel(
-      // Wrong arguments go back to the model like any tool error.
-      () => [done([toolCall('g0', 'guide', { steps: [] })], 'tool_use')],
-      // A backend tool called alongside runs first; a second page call is turned down.
-      () => [done([toolCall('l1', 'lookup', {}), toolCall('g1', 'guide', { steps: [1] }), toolCall('g2', 'guide', { steps: [2] })], 'tool_use')],
-    );
-    const { end } = await runTurnToEnd({ model, messages: [user('how?')], tools: [lookup, guide] });
-
+    const { end } = await runTurnToEnd({
+      model: realModel(),
+      system: "You can point at things on the user's screen with the highlight tool.",
+      messages: [user('Show me the Save button. It is element 7 on my screen.')],
+      tools: [highlight],
+    });
     expect(end.reason).toBe('page_tool');
-    expect(end.pageCall).toMatchObject({ id: 'g1', args: { steps: [1] } });
-    expect(end.messages.map((message) => message.role)).toEqual(['assistant', 'tool', 'assistant', 'tool']);
-    expect(end.messages[1]).toMatchObject({ results: [{ callId: 'g0', isError: true, content: 'Invalid arguments for guide: steps: empty' }] });
-    // The call handed over has no result yet: the frontend supplies it.
-    expect((end.messages[3] as { results: Array<{ callId: string; isError?: boolean }> }).results).toEqual([
-      { callId: 'l1', content: 'found' },
-      expect.objectContaining({ callId: 'g2', isError: true }),
+    expect(end.pageCall).toMatchObject({ name: 'highlight', args: { target: 7 } });
+    // The call handed over has no result yet: the frontend supplies it with the next request.
+    expect(end.messages.at(-1)?.role).toBe('assistant');
+  });
+});
+
+// What a real model can't be made to do on demand: recorded raw API responses, read by the real adapter.
+describe('runTurn on recorded API responses', () => {
+  const ev = (type: string, data: Record<string, unknown>) => ({ event: type, data: { type, ...data } });
+  const start = ev('message_start', { message: { model: 'claude-haiku-5-5', usage: { input_tokens: 10 } } });
+
+  it('on refusal discards the partial answer', async () => {
+    const { fetch } = mockFetch(
+      sseResponse([
+        start,
+        ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }),
+        ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'Sure, here is' } }),
+        ev('content_block_stop', { index: 0 }),
+        ev('message_delta', { delta: { stop_reason: 'refusal', stop_details: { type: 'refusal' } }, usage: { output_tokens: 3 } }),
+        ev('message_stop', {}),
+      ]),
+    );
+    const { end } = await runTurnToEnd({ model: createAnthropic({ apiKey: 'k', model: 'claude-haiku-5-5', fetch }), messages: [user('q')] });
+    expect(end.reason).toBe('refusal');
+    expect(end.stopDetails).toEqual({ type: 'refusal' });
+    expect(end.messages).toEqual([]);
+  });
+
+  it('answers calls to unknown tools and calls with broken JSON with an error result', async () => {
+    const tool = (index: number, id: string, name: string, json: string) => [
+      ev('content_block_start', { index, content_block: { type: 'tool_use', id, name, input: {} } }),
+      ev('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: json } }),
+      ev('content_block_stop', { index }),
+    ];
+    const { fetch, calls } = mockFetch(
+      sseResponse([
+        start,
+        ...tool(0, 'toolu_1', 'drop_tables', '{}'),
+        ...tool(1, 'toolu_2', 'get_secret_word', '{"day": '),
+        ev('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 9 } }),
+        ev('message_stop', {}),
+      ]),
+      sseResponse([
+        start,
+        ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }),
+        ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'ok' } }),
+        ev('content_block_stop', { index: 0 }),
+        ev('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } }),
+        ev('message_stop', {}),
+      ]),
+    );
+    const tool_ = secretWord();
+    const events = await collect(runTurn({ model: createAnthropic({ apiKey: 'k', model: 'claude-haiku-5-5', fetch }), messages: [user('q')], tools: [tool_] }));
+    expect(tool_.calls).toBe(0);
+    expect(results(events)).toEqual([
+      { callId: 'toolu_1', content: 'Unknown tool "drop_tables".', isError: true },
+      { callId: 'toolu_2', content: expect.stringMatching(/^INVALID_JSON/), isError: true },
     ]);
+    // Both results went back to the model in the next request.
+    expect(JSON.stringify(calls[1]!.body.messages)).toContain('Unknown tool');
+    expect(endOf(events).reason).toBe('completed');
   });
 });
