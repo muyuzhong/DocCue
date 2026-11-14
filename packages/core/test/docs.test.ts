@@ -93,6 +93,15 @@ describe('createDocs', () => {
     expect(await docs.read('nope.md#x')).toBeUndefined();
   });
 
+  it('lists a short file without headings, and gives the same prompt whatever order the files come in', () => {
+    const note: DocFile = { path: 'notes.md', content: '重启试试。' };
+    const shuffled = createDocs([note, ...[...FILES].reverse()]);
+    const sorted = createDocs([...FILES, note]);
+    expect(shuffled.toc().split('\n')).toContain('- notes (notes.md#notes)');
+    expect(shuffled.toc()).toBe(sorted.toc());
+    expect(shuffled.inline?.()).toBe(sorted.inline?.());
+  });
+
   it('goes into the system prompt whole when small, and through tools otherwise', () => {
     expect(docs.inline?.()).toContain('<doc path="datasource/new.md">');
     expect(docsPrompt(docs)).toContain('<docs>');

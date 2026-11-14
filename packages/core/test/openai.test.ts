@@ -116,13 +116,18 @@ describe('createOpenAI', () => {
     expect(calls[0]!.body).toMatchObject({ max_tokens: 50 });
   });
 
-  it('marks invalid tool JSON with args undefined', async () => {
-    const { fetch } = mockFetch(
+  it('marks invalid tool JSON with args undefined, and sends it back as {}', async () => {
+    const { fetch, calls } = mockFetch(
       sseResponse([chunk({ tool_calls: [{ index: 0, id: 'c', function: { name: 'f', arguments: '{"a":' } }] }, 'tool_calls'), { data: '[DONE]' }]),
+      sseResponse([chunk({ content: 'ok' }, 'stop')]),
     );
     const model = createOpenAI({ model: 'm', baseURL: 'http://local/v1', fetch });
     const end = (await collect(model.stream({ messages: [{ role: 'user', content: 'x' }] }))).at(-1) as ModelDone;
     expect(end.message.content[0]).toMatchObject({ type: 'tool_call', args: undefined, rawArgs: '{"a":' });
+
+    // Servers that parse the arguments of earlier calls would reject the broken JSON.
+    await collect(model.stream({ messages: [{ role: 'user', content: 'x' }, end.message, { role: 'tool', results: [{ callId: 'c', content: 'INVALID_JSON', isError: true }] }] }));
+    expect(calls[1]!.body.messages).toContainEqual({ role: 'assistant', content: null, tool_calls: [{ id: 'c', type: 'function', function: { name: 'f', arguments: '{}' } }] });
   });
 
   it('raises ModelError for HTTP errors, error chunks and truncated streams', async () => {

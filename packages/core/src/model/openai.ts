@@ -123,7 +123,9 @@ export function toOpenAIMessages(system: string | undefined, messages: readonly 
         wire.tool_calls = calls.map((call) => ({
           id: call.id,
           type: 'function',
-          function: { name: call.name, arguments: call.rawArgs || JSON.stringify(call.args ?? {}) },
+          // Arguments that weren't valid JSON go back as `{}`: some servers parse the arguments of
+          // earlier calls and reject the whole request otherwise. The call's result says what was wrong.
+          function: { name: call.name, arguments: call.args === undefined ? '{}' : call.rawArgs || JSON.stringify(call.args) },
         }));
       }
       out.push(wire);

@@ -125,17 +125,22 @@ function count(haystack: readonly string[], term: string): number {
 
 /** Documentation from Markdown files, held in memory. Works in any runtime; `markdownDocs` in `@doccue/core/node` reads a folder. */
 export function createDocs(files: readonly DocFile[], options: DocsOptions = {}): DocsProvider {
-  const all = [...files].sort((a, b) => a.path.localeCompare(b.path)).flatMap(sections);
+  // In path order, not the order the files were read in (which differs between machines): the
+  // table of contents and the inlined text go into the system prompt and have to be the same
+  // everywhere for the prompt cache to hit.
+  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
+  const all = sorted.flatMap(sections);
   const byId = new Map(all.map((section) => [section.id, section]));
   const indexed = all.map((section) => ({ section, title: terms(section.trail.join(' ')), body: terms(section.own) }));
-  const fullText = files.map((file) => `<doc path="${file.path}">\n${file.content.trim()}\n</doc>`).join('\n\n');
+  const fullText = sorted.map((file) => `<doc path="${file.path}">\n${file.content.trim()}\n</doc>`).join('\n\n');
   const inlineMax = options.inlineMaxChars ?? 12000;
   const maxHits = options.maxHits ?? 5;
 
   return {
     toc: () =>
       all
-        .filter((section) => section.level <= 3 && (section.level > 0 || section.own.length > section.title.length))
+        // A file's text before its first heading is listed under the file's name, unless there is none.
+        .filter((section) => section.level <= 3 && (section.level > 0 || section.own.length > 0))
         .map((section) => `${'  '.repeat(Math.max(0, section.level - 1))}- ${section.title} (${section.id})`)
         .join('\n'),
 

@@ -27,6 +27,7 @@ import { messagesFor } from './messages.js';
 import { createRecorder } from './recorder.js';
 import { buildScreen } from './screen.js';
 import { whenSettled } from './settle.js';
+import { readAnswer } from './stream.js';
 
 export interface BridgeOptions {
   /** Where the DocCue handler is mounted, e.g. `/doccue`. */
@@ -71,7 +72,8 @@ type Listener<T extends BridgeEvent['type']> = (event: Extract<BridgeEvent, { ty
 export interface Bridge {
   /**
    * Sends the question with everything recorded since the last one. Resolves when the exchange
-   * is over: the answer ended, including any guides it led to.
+   * is over: the answer ended, including any guides it led to. Rejects when a request fails or an
+   * answer is cut off before its end; nothing of that answer goes into the conversation.
    */
   ask(question: string): Promise<void>;
   /** Stops the answer in progress and closes the guide on screen. */
@@ -113,28 +115,6 @@ function sessionStore(): Storage | undefined {
     return globalThis.sessionStorage;
   } catch {
     return undefined; // Blocked by privacy settings.
-  }
-}
-
-/** Reads the server-sent events of a response body, one JSON object per event. */
-async function* readEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<StreamEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) return;
-    buffer += decoder.decode(value, { stream: true });
-    const messages = buffer.split('\n\n');
-    buffer = messages.pop() ?? '';
-    for (const message of messages) {
-      const data = message
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n');
-      if (data) yield JSON.parse(data) as StreamEvent;
-    }
   }
 }
 
@@ -259,7 +239,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       throw new Error(`DocCue ${response.status}: ${(body.errors ?? []).join('; ') || response.statusText}`);
     }
     let started: GuideState | undefined;
-    for await (const event of readEvents(response.body)) {
+    for await (const event of readAnswer(response.body)) {
       if (event.type === 'guide') {
         // Numbers become locators now, while the elements they stand for are known.
         const locators = event.steps.map((step) => {
