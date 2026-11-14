@@ -49,6 +49,18 @@ describe('renderScreen', () => {
   });
 });
 
+describe('renderScreen on a long list', () => {
+  it('says how many rows were left out', () => {
+    expect(renderScreen({ page: { path: '/datasource' }, nodes: [{ ref: 1, role: 'table', name: '数据源', more: 25, children: [{ ref: 2, role: 'row', children: [{ role: 'text', name: 'ds-0' }] }] }] }).split('\n')).toEqual([
+      'page /datasource',
+      '[1] table "数据源"',
+      '  [2] row',
+      '    text "ds-0"',
+      '  ... 25 more not shown',
+    ]);
+  });
+});
+
 describe('renderActions', () => {
   it('prints actions with their effects and how long ago they happened', () => {
     expect(renderActions(perception.actions, NOW)).toEqual([

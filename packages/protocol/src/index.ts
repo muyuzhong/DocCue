@@ -53,6 +53,8 @@ export interface ScreenNode {
   /** `disabled`, `checked`, `invalid`, `expanded`, `collapsed`, `current`, `password`, `filled`. */
   states?: string[];
   children?: ScreenNode[];
+  /** On a long table or list: how many more rows or items it has that are not listed. */
+  more?: number;
 }
 
 /** What is visible right now, as a tree. */

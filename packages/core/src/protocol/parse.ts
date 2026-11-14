@@ -107,6 +107,7 @@ function checkNode(value: unknown, path: string, errors: Errors, depth: number):
   field(value, 'value', 'string', path, errors, true);
   list(value, 'states', path, errors, each('string', errors), true);
   list(value, 'children', path, errors, (child, at) => checkNode(child, at, errors, depth + 1), true);
+  field(value, 'more', 'number', path, errors, true);
 }
 
 const EFFECTS: Record<string, (effect: Obj, path: string, errors: Errors) => void> = {

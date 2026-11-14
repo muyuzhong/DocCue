@@ -15,14 +15,32 @@ const TEXT_FIELD_TYPES = new Set(['text', 'email', 'number', 'search', 'tel', 'u
 
 export interface ScreenOptions {
   errorSelectors: readonly string[];
-  /** Nodes kept in the snapshot; the rest are counted in `truncated`. Defaults to 300. */
+  /**
+   * Nodes kept in the snapshot; the rest are counted in `truncated`. When there are more, open
+   * dialogs and messages go first, then what is in view, then what is scrolled away; a node kept
+   * keeps its groups around it. Defaults to 300.
+   */
   maxNodes?: number;
+  /** Rows of a table, or items of a list, listed before the rest are only counted. Defaults to 20. */
+  maxRows?: number;
+  /** Elements looked at, at most, to stay cheap on huge pages. Defaults to 5000. */
+  maxElements?: number;
 }
 
 export interface Snapshot {
   screen: Screen;
   /** The element behind each `ref`. */
   elements: Map<number, Element>;
+}
+
+/** A node on its way into the snapshot. */
+interface Draft {
+  node: ScreenNode;
+  /** The element, for nodes that get a number. */
+  element?: Element;
+  /** 0: in an open dialog, or a message; 1: in view; 2: scrolled away. */
+  priority: number;
+  children: Draft[];
 }
 
 function controlNode(element: Element): ScreenNode {
@@ -84,39 +102,85 @@ function ownText(element: Element): string {
   return clean(text);
 }
 
+/** Whether the element is (at least partly) in the viewport; `undefined` without layout (zero size). */
+function seen(element: Element): boolean | undefined {
+  const rect = element.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return undefined;
+  const view = element.ownerDocument.defaultView;
+  const height = view?.innerHeight ?? Infinity;
+  const width = view?.innerWidth ?? Infinity;
+  return rect.bottom > 0 && rect.right > 0 && rect.top < height && rect.left < width;
+}
+
+/** In view, or no way to tell. */
+const inView = (element: Element) => seen(element) !== false;
+
+const ROW_CONTAINERS = new Set(['TABLE', 'TBODY', 'THEAD', 'TFOOT']);
+const ITEM_CONTAINERS = new Set(['UL', 'OL', 'MENU']);
+
+/** The children of `element` that are rows or list items, if it holds them. */
+function itemsOf(element: Element): Element[] {
+  const role = element.getAttribute('role') ?? '';
+  const rows = ROW_CONTAINERS.has(element.tagName) || ['table', 'grid', 'treegrid', 'rowgroup'].includes(role);
+  const items = ITEM_CONTAINERS.has(element.tagName) || ['list', 'listbox', 'menu'].includes(role);
+  if (!rows && !items) return [];
+  return Array.from(element.children).filter((child) => {
+    const childRole = child.getAttribute('role') ?? '';
+    return rows ? child.tagName === 'TR' || childRole === 'row' : child.tagName === 'LI' || ['listitem', 'option', 'menuitem'].includes(childRole);
+  });
+}
+
+/**
+ * The rows to list, `max` in all: those in view (the middle ones, if there are more), then the
+ * rows just around them; without layout, the first ones.
+ */
+function pickRows(rows: readonly Element[], max: number): Set<Element> {
+  const visible = rows.flatMap((row, index) => (seen(row) === true ? [index] : []));
+  if (visible.length === 0) return new Set(rows.slice(0, max));
+  const skip = Math.max(0, Math.floor((visible.length - max) / 2));
+  let low = visible[skip]!;
+  let high = visible[Math.min(visible.length, skip + max) - 1]!;
+  while (high - low + 1 < max) {
+    if (high + 1 < rows.length) high++;
+    if (high - low + 1 < max && low > 0) low--;
+    if (low === 0 && high === rows.length - 1) break;
+  }
+  return new Set(rows.slice(low, high + 1));
+}
+
 export function buildScreen(document: Document, options: ScreenOptions): Snapshot {
   const errorSelector = options.errorSelectors.join(', ');
   const maxNodes = options.maxNodes ?? 300;
-  const elements = new Map<number, Element>();
-  const nodes: ScreenNode[] = [];
-  let count = 0;
-  let truncated = 0;
+  const maxRows = options.maxRows ?? 20;
+  const maxElements = options.maxElements ?? 5000;
+  let visited = 0;
 
-  /** Adds a node to `out`; with `element`, the node gets a number. */
-  const add = (out: ScreenNode[], node: ScreenNode, element?: Element): ScreenNode | undefined => {
-    if (count >= maxNodes) {
-      truncated++;
-      return undefined;
-    }
-    count++;
-    const numbered = element ? { ref: elements.size + 1, ...node } : node;
-    if (element) elements.set(elements.size + 1, element);
-    out.push(numbered);
-    return numbered;
+  const draft = (out: Draft[], node: ScreenNode, element: Element, numbered: boolean, urgent: boolean): Draft => {
+    const made: Draft = { node, priority: urgent ? 0 : inView(element) ? 1 : 2, children: [], ...(numbered ? { element } : {}) };
+    out.push(made);
+    return made;
   };
 
-  // Inside a <label> the text is the control's name, so only the control itself is listed.
-  const walk = (element: Element, out: ScreenNode[], inLabel = false) => {
+  interface Context {
+    /** Inside a <label>: its text is the control's name, so only the control itself is listed. */
+    inLabel: boolean;
+    inDialog: boolean;
+    /** The nearest group around, e.g. the table a <tbody> is in. */
+    group?: Draft;
+  }
+
+  const walk = (element: Element, out: Draft[], context: Context) => {
+    if (++visited > maxElements) return;
     const tag = element.tagName.toUpperCase();
     if (SKIP_TAGS.has(tag) || isIgnored(element) || !isVisible(element)) return;
 
     if (/^H[1-6]$/.test(tag) || element.getAttribute('role') === 'heading') {
       const text = textOf(element);
-      if (text) add(out, { role: 'heading', name: clip(text, 80) }, element);
+      if (text) draft(out, { role: 'heading', name: clip(text, 80) }, element, true, context.inDialog);
       return;
     }
     if (isInteractive(element)) {
-      add(out, controlNode(element), element);
+      draft(out, controlNode(element), element, true, context.inDialog);
       return;
     }
     const message = errorSelector && element.matches(errorSelector) ? 'alert' : element.matches(NOTICE_SELECTOR) ? 'status' : undefined;
@@ -124,24 +188,79 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
     // aria-live, say) is a group instead, or the controls in it would be lost.
     if (message && !hasControlInside(element)) {
       const text = textOf(element);
-      if (text) add(out, { role: message, name: clip(text, 200) });
+      if (text) draft(out, { role: message, name: clip(text, 200) }, element, false, true);
       return;
     }
 
-    const group = message ? { role: message } : groupNode(element);
-    const added = group ? add(out, group, element) : undefined;
-    const children: ScreenNode[] = [];
-    const childOut = added ? children : out;
-    const quiet = inLabel || tag === 'LABEL';
+    const node = message ? { role: message } : groupNode(element);
+    const inDialog = context.inDialog || node?.role === 'dialog';
+    let group = node ? draft(out, node, element, true, inDialog || message !== undefined) : undefined;
+
+    // A long table or list: only some rows, and a count of the rest.
+    let children = Array.from(element.children);
+    const items = itemsOf(element);
+    if (items.length > maxRows) {
+      const kept = pickRows(items, maxRows);
+      children = children.filter((child) => !items.includes(child) || kept.has(child));
+      const inTable = ['TBODY', 'THEAD', 'TFOOT'].includes(tag) || element.getAttribute('role') === 'rowgroup';
+      const counter = group ?? (inTable && context.group?.node.role === 'table' ? context.group : undefined) ?? (group = draft(out, { role: 'list', ...(clean(element.getAttribute('aria-label')) ? { name: clean(element.getAttribute('aria-label')) } : {}) }, element, true, inDialog));
+      counter.node.more = (counter.node.more ?? 0) + items.length - kept.size;
+    }
+
+    const childOut = group ? group.children : out;
+    const quiet = context.inLabel || tag === 'LABEL';
     if (!quiet && TEXT_TAGS.has(tag)) {
       const text = ownText(element);
-      if (text) add(childOut, { role: 'text', name: clip(text, 120) });
+      if (text) draft(childOut, { role: 'text', name: clip(text, 120) }, element, false, inDialog);
     }
-    for (const child of Array.from(element.children)) walk(child, childOut, quiet);
-    if (added && children.length > 0) added.children = children;
+    const inner: Context = { inLabel: quiet, inDialog, ...(group ? { group } : context.group ? { group: context.group } : {}) };
+    for (const child of children) walk(child, childOut, inner);
   };
 
-  if (document.body) for (const child of Array.from(document.body.children)) walk(child, nodes);
+  const drafts: Draft[] = [];
+  if (document.body) for (const child of Array.from(document.body.children)) walk(child, drafts, { inLabel: false, inDialog: false });
+
+  // Over the budget: keep the most important nodes, each with the groups around it.
+  const all: Array<{ draft: Draft; parent?: Draft; order: number }> = [];
+  const parents = new Map<Draft, Draft | undefined>();
+  const collect = (list: Draft[], parent?: Draft) => {
+    for (const item of list) {
+      parents.set(item, parent);
+      all.push({ draft: item, ...(parent ? { parent } : {}), order: all.length });
+      collect(item.children, item);
+    }
+  };
+  collect(drafts);
+  let keep: Set<Draft> | undefined;
+  if (all.length > maxNodes) {
+    keep = new Set();
+    for (const { draft: candidate } of [...all].sort((a, b) => a.draft.priority - b.draft.priority || a.order - b.order)) {
+      if (keep.has(candidate)) continue;
+      const chain: Draft[] = [];
+      for (let at: Draft | undefined = candidate; at && !keep.has(at); at = parents.get(at)) chain.push(at);
+      if (keep.size + chain.length > maxNodes) continue;
+      for (const item of chain) keep.add(item);
+      if (keep.size >= maxNodes) break;
+    }
+  }
+
+  // Number what is kept, in page order.
+  const elements = new Map<number, Element>();
+  const finish = (list: Draft[]): ScreenNode[] =>
+    list
+      .filter((item) => !keep || keep.has(item))
+      .map((item) => {
+        let node: ScreenNode = item.node;
+        if (item.element) {
+          elements.set(elements.size + 1, item.element);
+          node = { ref: elements.size, ...node };
+        }
+        const children = finish(item.children);
+        return children.length > 0 ? { ...node, children } : node;
+      });
+  const nodes = finish(drafts);
+  const truncated = keep ? all.length - keep.size : 0;
+
   const title = clean(document.title);
   return {
     screen: {

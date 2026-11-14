@@ -1,3 +1,4 @@
+import type { ScreenNode } from '@doccue/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { collectErrors, DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
 import { accessibleName, findControl, isInteractive, locatorOf, roleOf } from '../src/naming.js';
@@ -168,5 +169,63 @@ describe('buildScreen', () => {
     const { screen } = buildScreen(document, { errorSelectors: [], maxNodes: 20 });
     expect(screen.nodes).toHaveLength(20);
     expect(screen.truncated).toBe(30);
+  });
+});
+
+describe('buildScreen on big pages', () => {
+  const place = (element: Element, top: number) => {
+    (element as HTMLElement).getBoundingClientRect = () => ({ top, bottom: top + 20, left: 0, right: 100, width: 100, height: 20, x: 0, y: top, toJSON: () => ({}) }) as DOMRect;
+  };
+  const refsIn = (nodes: readonly ScreenNode[]): number[] => nodes.flatMap((node) => [...(node.ref === undefined ? [] : [node.ref]), ...refsIn(node.children ?? [])]);
+
+  it('lists some rows of a long table and counts the rest', () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `<tr><td>ds-${i}</td><td><button>删除</button></td></tr>`).join('');
+    document.body.innerHTML = `<table aria-label="数据源"><tbody>${rows}</tbody></table>`;
+    const { screen } = buildScreen(document, { errorSelectors: [] });
+    const table = screen.nodes[0]!;
+    expect(table).toMatchObject({ role: 'table', name: '数据源', more: 20 });
+    expect(table.children).toHaveLength(20);
+    expect(table.children![0]).toMatchObject({ role: 'row', children: [{ role: 'text', name: 'ds-0' }, { role: 'button', name: '删除' }] });
+  });
+
+  it('wraps a long plain list in a list node to count what is left out', () => {
+    document.body.innerHTML = `<ul aria-label="最近打开">${Array.from({ length: 30 }, (_, i) => `<li><a href="/r/${i}">报表 ${i}</a></li>`).join('')}</ul>`;
+    const { screen } = buildScreen(document, { errorSelectors: [] });
+    expect(screen.nodes).toEqual([expect.objectContaining({ role: 'list', name: '最近打开', more: 10 })]);
+    expect(screen.nodes[0]!.children).toHaveLength(20);
+  });
+
+  it('prefers the rows the user can see, the middle ones when there are too many', () => {
+    document.body.innerHTML = `<table><tbody>${Array.from({ length: 40 }, (_, i) => `<tr><td>ds-${i}</td></tr>`).join('')}</tbody></table>`;
+    // Scrolled down: rows 30 to 39 are on screen.
+    document.querySelectorAll('tr').forEach((row, i) => place(row, (i - 30) * 20));
+    const { screen } = buildScreen(document, { errorSelectors: [], maxRows: 10 });
+    expect(screen.nodes[0]!.children!.map((row) => row.children![0]!.name)).toEqual(Array.from({ length: 10 }, (_, i) => `ds-${30 + i}`));
+    // Rows 10 to 39 on screen, room for 10: the middle ones.
+    document.querySelectorAll('tr').forEach((row, i) => place(row, (i - 10) * 20));
+    const { screen: middle } = buildScreen(document, { errorSelectors: [], maxRows: 10 });
+    expect(middle.nodes[0]!.children!.map((row) => row.children![0]!.name)).toEqual(Array.from({ length: 10 }, (_, i) => `ds-${20 + i}`));
+  });
+
+  it('keeps an open dialog and the errors when the page is too big, numbering what is kept in order', () => {
+    document.body.innerHTML = `
+      ${Array.from({ length: 50 }, (_, i) => `<button>按钮${i}</button>`).join('')}
+      <p role="alert">保存失败</p>
+      <div role="dialog" aria-label="删除数据源"><p>删除后无法恢复。</p><button>取消</button><button>确定删除</button></div>`;
+    const { screen, elements } = buildScreen(document, { errorSelectors: ['[role="alert"]'], maxNodes: 8 });
+    expect(screen.truncated).toBe(50 + 5 - 8); // 50 buttons, plus the alert and the dialog with its text and two buttons
+    expect(screen.nodes.slice(-2)).toEqual([
+      { role: 'alert', name: '保存失败' },
+      { ref: 4, role: 'dialog', name: '删除数据源', children: [{ role: 'text', name: '删除后无法恢复。' }, { ref: 5, role: 'button', name: '取消' }, { ref: 6, role: 'button', name: '确定删除' }] },
+    ]);
+    expect(refsIn(screen.nodes)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(elements.get(6)!.textContent).toBe('确定删除');
+  });
+
+  it('keeps what is in view before what is scrolled away', () => {
+    document.body.innerHTML = Array.from({ length: 50 }, (_, i) => `<button>按钮${i}</button>`).join('');
+    document.querySelectorAll('button').forEach((button, i) => place(button, i < 40 ? 2000 + i * 20 : (i - 40) * 20));
+    const { screen } = buildScreen(document, { errorSelectors: [], maxNodes: 10 });
+    expect(screen.nodes.map((node) => node.name)).toEqual(Array.from({ length: 10 }, (_, i) => `按钮${40 + i}`));
   });
 });

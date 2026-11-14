@@ -98,6 +98,7 @@ function renderNode(node: ScreenNode, depth: number, lines: string[]): void {
   if (node.states && node.states.length > 0) line += ` (${node.states.join(', ')})`;
   lines.push(line);
   for (const child of node.children ?? []) renderNode(child, depth + 1, lines);
+  if (node.more) lines.push(`${'  '.repeat(depth + 1)}... ${node.more} more not shown`);
 }
 
 /** The screen tree as indented lines, e.g. `  [3] textbox "主机地址" = "127.0.0.1" (invalid)`. */
