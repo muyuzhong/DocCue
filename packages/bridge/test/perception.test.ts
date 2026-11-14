@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { collectErrors, DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
-import { accessibleName, findControl, locatorOf, roleOf } from '../src/naming.js';
+import { accessibleName, findControl, isInteractive, locatorOf, roleOf } from '../src/naming.js';
 import { buildScreen } from '../src/screen.js';
 
 const $ = <T extends Element = HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -65,6 +65,21 @@ describe('naming', () => {
     $('#plain').click();
     expect(none).toBeUndefined();
   });
+
+  it('takes a tabindex alone for a control only on something clickable that holds no controls', () => {
+    document.body.innerHTML = `
+      <div id="panel" tabindex="0" style="cursor:pointer"><span id="text">说明文字</span><button>保存</button></div>
+      <pre id="code" tabindex="0">SELECT 1;</pre>
+      <div id="region" role="region" tabindex="0" style="cursor:pointer">滚动区</div>
+      <div id="sentinel" tabindex="0"></div>
+      <div id="fake" tabindex="0" style="cursor:pointer">更多</div>`;
+    expect(['panel', 'code', 'region', 'sentinel', 'fake'].map((id) => isInteractive($(`#${id}`)))).toEqual([false, false, false, false, true]);
+    // A click on the text of a container is not a click on the container.
+    let found: Element | undefined = $('#panel');
+    document.addEventListener('click', (event) => (found = findControl(event)), { once: true });
+    $('#text').click();
+    expect(found).toBeUndefined();
+  });
 });
 
 describe('errors', () => {
@@ -126,6 +141,26 @@ describe('buildScreen', () => {
     // Each number leads back to its element.
     expect(elements.get(5)).toBe($('#host'));
     expect((elements.get(9) as HTMLButtonElement).textContent).toBe('保存');
+  });
+
+  it('keeps the controls inside focusable containers and live regions', () => {
+    document.body.innerHTML = `
+      <div tabindex="0"><label for="name">名称</label><input id="name" value="orders-db" /></div>
+      <div aria-live="polite"><p>正在测试连接</p><button>取消</button></div>
+      <div aria-live="polite">已保存草稿</div>`;
+    const { screen } = buildScreen(document, { errorSelectors: DEFAULT_ERROR_SELECTORS });
+    expect(screen.nodes).toEqual([
+      { ref: 1, role: 'textbox', name: '名称', value: 'orders-db' },
+      {
+        ref: 2,
+        role: 'status',
+        children: [
+          { role: 'text', name: '正在测试连接' },
+          { ref: 3, role: 'button', name: '取消' },
+        ],
+      },
+      { role: 'status', name: '已保存草稿' },
+    ]);
   });
 
   it('stops at the size cap and says how much is left', () => {

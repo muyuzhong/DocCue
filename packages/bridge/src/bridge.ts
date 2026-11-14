@@ -33,7 +33,10 @@ export interface BridgeOptions {
   endpoint: string;
   /** The user's language, e.g. `zh-CN`. Defaults to the page's `lang`, then the browser's. */
   locale?: string;
-  /** What the host app knows about the user, e.g. role or plan. */
+  /**
+   * What the host app knows about the user, e.g. role or plan. Anyone can change what the browser
+   * sends: for anything that must hold, set it on the backend instead (`createHandler`'s `user`).
+   */
   user?: Record<string, unknown>;
   /** Extra selectors for error messages, e.g. your UI library's (common ones are built in). */
   errorSelectors?: string[];

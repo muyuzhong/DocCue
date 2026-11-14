@@ -8,7 +8,7 @@ import { describeError, safeLog, withModelLog, type Logger } from '../log/log.js
 import { runTurn } from '../loop/run-turn.js';
 import type { Tool } from '../loop/types.js';
 import { ModelError } from '../model/errors.js';
-import type { ModelAdapter } from '../model/types.js';
+import { emptyUsage, type ModelAdapter } from '../model/types.js';
 import { docsPrompt, docsTools, type DocsProvider } from '../docs/docs.js';
 import { buildSystemPrompt, renderConversation } from '../render/render.js';
 import { GUIDE_TOOL, guideTool, latestScreen, readSteps } from './guide.js';
@@ -37,54 +37,66 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
   let step = 0;
   const model = logger ? withModelLog(options.model, (record) => logger({ ...record, requestId, step: ++step })) : options.model;
 
-  const events = runTurn({
-    model,
-    system: buildSystemPrompt(options.instructions, options.docs ? [docsPrompt(options.docs)] : []),
-    messages: renderConversation(request),
-    tools: [...(options.docs ? docsTools(options.docs) : []), ...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
-    ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
-    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    ...(signal ? { signal } : {}),
-  });
+  try {
+    const events = runTurn({
+      model,
+      system: buildSystemPrompt(options.instructions, options.docs ? [docsPrompt(options.docs)] : []),
+      messages: renderConversation(request),
+      tools: [...(options.docs ? docsTools(options.docs) : []), ...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
+      ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
+      ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+      ...(signal ? { signal } : {}),
+    });
 
-  for await (const event of events) {
-    switch (event.type) {
-      case 'step_start':
-        yield { type: 'status', state: 'thinking' };
-        break;
-      case 'text':
-        yield { type: 'text', delta: event.delta };
-        break;
-      case 'tool_call':
-        if (event.call.name !== GUIDE_TOOL) yield { type: 'status', state: 'tool', tool: event.call.name };
-        break;
-      case 'turn_end': {
-        const error = event.error
-          ? { message: event.error.message, ...(event.error instanceof ModelError && event.error.code ? { code: event.error.code } : {}) }
-          : undefined;
-        safeLog(logger, {
-          kind: 'end',
-          at: Date.now(),
-          requestId,
-          reason: event.reason,
-          usage: event.usage,
-          ...(event.error ? { error: describeError(event.error) } : {}),
-        });
-        const item = { type: 'model' as const, messages: event.messages };
-        if (event.reason === 'page_tool') {
-          // The frontend runs the guide and sends its result with the next request.
-          // The loop only hands over calls that passed validation, so the steps are readable.
-          const call = event.pageCall!;
-          const read = readSteps(call.args);
-          yield { type: 'guide', callId: call.id, steps: 'steps' in read ? read.steps : [] };
-          yield { type: 'end', reason: 'guide', item, usage: event.usage };
-        } else {
-          yield { type: 'end', reason: event.reason, item, usage: event.usage, ...(error ? { error } : {}) };
+    for await (const event of events) {
+      switch (event.type) {
+        case 'step_start':
+          yield { type: 'status', state: 'thinking' };
+          break;
+        case 'text':
+          yield { type: 'text', delta: event.delta };
+          break;
+        case 'tool_call':
+          if (event.call.name !== GUIDE_TOOL) yield { type: 'status', state: 'tool', tool: event.call.name };
+          break;
+        case 'turn_end': {
+          const error = event.error
+            ? { message: event.error.message, ...(event.error instanceof ModelError && event.error.code ? { code: event.error.code } : {}) }
+            : undefined;
+          safeLog(logger, {
+            kind: 'end',
+            at: Date.now(),
+            requestId,
+            reason: event.reason,
+            usage: event.usage,
+            ...(event.error ? { error: describeError(event.error) } : {}),
+          });
+          const item = { type: 'model' as const, messages: event.messages };
+          if (event.reason === 'page_tool') {
+            // The frontend runs the guide and sends its result with the next request.
+            // The loop only hands over calls that passed validation, so the steps are readable.
+            const call = event.pageCall!;
+            const read = readSteps(call.args);
+            yield { type: 'guide', callId: call.id, steps: 'steps' in read ? read.steps : [] };
+            yield { type: 'end', reason: 'guide', item, usage: event.usage };
+          } else {
+            yield { type: 'end', reason: event.reason, item, usage: event.usage, ...(error ? { error } : {}) };
+          }
+          return;
         }
-        return;
+        default:
+          break;
       }
-      default:
-        break;
     }
+  } catch (error) {
+    // A bug or a misbehaving hook (docs, tools): the stream still ends properly. The details go
+    // to the log, not to the browser.
+    safeLog(logger, { kind: 'end', at: Date.now(), requestId, reason: 'error', usage: emptyUsage(), error: describeError(error) });
+    yield failedEnd();
   }
+}
+
+/** The end event for a request that failed unexpectedly. Nothing is added to the conversation. */
+export function failedEnd(): Extract<StreamEvent, { type: 'end' }> {
+  return { type: 'end', reason: 'error', item: { type: 'model', messages: [] }, usage: emptyUsage(), error: { message: 'internal error' } };
 }

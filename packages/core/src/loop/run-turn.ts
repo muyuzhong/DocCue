@@ -146,10 +146,14 @@ export async function* runTurn(options: TurnOptions): AsyncGenerator<LoopEvent, 
         return tool !== undefined && !tool.execute && problemWith(tool, call) === undefined;
       });
       const results = await runTools(calls.filter((call) => call !== pageCall), tools, signal);
+      const handOver = signal.aborted ? undefined : pageCall;
+      // Stopped before the page call was handed over: it gets a result like the others, in call
+      // order. A call left without one would make every later request fail.
+      if (pageCall && !handOver) results.splice(calls.indexOf(pageCall), 0, { callId: pageCall.id, content: NOT_RUN, isError: true });
       if (results.length > 0) append({ role: 'tool', results });
       for (const result of results) yield { type: 'tool_result', result };
-      if (pageCall && !signal.aborted) {
-        yield end('page_tool', { pageCall });
+      if (handOver) {
+        yield end('page_tool', { pageCall: handOver });
         return;
       }
 
@@ -187,12 +191,14 @@ function closeQuietly(iterator: AsyncIterator<unknown>): Promise<void> {
     );
 }
 
+const NOT_RUN = 'Cancelled: the turn was stopped before this tool ran.';
+
 /** Runs one step's tool calls in parallel. Every call gets exactly one result, in call order. */
 async function runTools(calls: readonly ToolCallPart[], tools: ReadonlyMap<string, Tool>, signal: AbortSignal): Promise<ToolResult[]> {
   return Promise.all(
     calls.map(async (call): Promise<ToolResult> => {
       const fail = (content: string): ToolResult => ({ callId: call.id, content, isError: true });
-      if (signal.aborted) return fail('Cancelled: the turn was stopped before this tool ran.');
+      if (signal.aborted) return fail(NOT_RUN);
       const tool = tools.get(call.name);
       if (!tool) return fail(`Unknown tool "${call.name}".`);
       const problem = problemWith(tool, call);
@@ -212,7 +218,13 @@ async function runTools(calls: readonly ToolCallPart[], tools: ReadonlyMap<strin
 /** What is wrong with a call's arguments, as a message for the model; `undefined` if they are fine. */
 function problemWith(tool: Tool, call: ToolCallPart): string | undefined {
   if (call.args === undefined) return `INVALID_JSON: the arguments for ${call.name} are not valid JSON. Call the tool again with valid JSON.`;
-  const problem = checkArgs(tool, call.args) ?? tool.validate?.(call.args);
+  let problem: string | undefined;
+  try {
+    problem = checkArgs(tool, call.args) ?? tool.validate?.(call.args);
+  } catch (error) {
+    // A validator that throws rejects the call instead of failing the whole turn.
+    problem = error instanceof Error ? error.message : String(error);
+  }
   return problem ? `Invalid arguments for ${call.name}: ${problem}` : undefined;
 }
 

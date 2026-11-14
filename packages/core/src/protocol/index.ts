@@ -1,1 +1,1 @@
-export { parseTurnRequest, type ParseResult } from './parse.js';
+export { isLocale, parseTurnRequest, type ParseResult } from './parse.js';

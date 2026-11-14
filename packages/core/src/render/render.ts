@@ -7,6 +7,7 @@
  */
 import type { Effect, GuideResult, Locator, Perception, Screen, ScreenNode, TimelineEntry, TurnRequest } from '@doccue/protocol';
 import type { Message } from '../model/types.js';
+import { isLocale } from '../protocol/parse.js';
 
 export const DEFAULT_INSTRUCTIONS =
   'You are the in-app assistant of this product. You help users get started and solve problems they run into while using it.';
@@ -26,6 +27,12 @@ export function buildSystemPrompt(instructions: string = DEFAULT_INSTRUCTIONS, e
 }
 
 const quote = (text: string) => JSON.stringify(text);
+
+/**
+ * Breaks up anything in the text that reads as a context tag, so that text from the page (a name
+ * on screen, a value typed into a field) or the question can't close the block or open a new one.
+ */
+const unfence = (text: string) => text.replace(/<(\/?context)/gi, '‹$1');
 
 /** `button "删除" in row "mysql-prod" in dialog "确认"`. */
 export function renderLocator(locator: Locator): string {
@@ -130,15 +137,16 @@ export function renderConversation({ conversation, locale, user }: RenderInput):
   let first = true;
   for (const item of conversation) {
     if (item.type === 'user') {
-      const lines = [first && locale ? `<context locale="${locale}">` : '<context>'];
+      const lines: string[] = [];
       if (first && user && Object.keys(user).length > 0) lines.push(`user: ${renderUser(user)}`);
-      lines.push(...renderPerception(item.perception), '</context>', item.text);
-      messages.push({ role: 'user', content: lines.join('\n') });
+      lines.push(...renderPerception(item.perception));
+      const open = first && isLocale(locale) ? `<context locale="${locale}">` : '<context>';
+      messages.push({ role: 'user', content: [open, unfence(lines.join('\n')), '</context>', unfence(item.text)].join('\n') });
       first = false;
     } else if (item.type === 'model') {
       messages.push(...(item.messages as Message[]));
     } else {
-      const result = { callId: item.callId, content: renderGuideResult(item.result) };
+      const result = { callId: item.callId, content: unfence(renderGuideResult(item.result)) };
       // Backend tools called in the same step already left their results: one message for all.
       const last = messages[messages.length - 1];
       if (last?.role === 'tool') messages[messages.length - 1] = { role: 'tool', results: [...last.results, result] };

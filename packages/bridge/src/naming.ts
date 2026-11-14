@@ -54,8 +54,25 @@ export function isInteractive(element: Element): boolean {
   if (role && INTERACTIVE_ROLES.has(role)) return true;
   const editable = element.getAttribute('contenteditable');
   if (editable !== null && editable !== 'false') return true;
+  // A tabindex only makes an element focusable. Scroll areas, code blocks, dialog wrappers and
+  // focus traps carry one too, so on its own it counts only for something without a role of its
+  // own that looks clickable and holds no controls: a clickable <div> standing in for a button.
+  if (role) return false;
   const tabindex = element.getAttribute('tabindex');
-  return tabindex !== null && Number(tabindex) >= 0;
+  if (tabindex === null || !(Number(tabindex) >= 0)) return false;
+  return looksClickable(element) && !hasControlInside(element);
+}
+
+/** A pointer cursor or an inline click handler: what a clickable element without a role has. */
+function looksClickable(element: Element): boolean {
+  if (element.hasAttribute('onclick')) return true;
+  const view = element.ownerDocument.defaultView;
+  return !view || view.getComputedStyle(element).cursor === 'pointer';
+}
+
+/** Whether a control sits somewhere inside the element. */
+export function hasControlInside(element: Element): boolean {
+  return Array.from(element.querySelectorAll(CANDIDATE_SELECTOR)).some(isInteractive);
 }
 
 /** The control an event happened on: the nearest interactive element along its path. */

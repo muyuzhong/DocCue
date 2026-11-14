@@ -43,7 +43,10 @@ export interface ScreenNode {
    * `table`, `row`, `tablist`, `menu`, `text`, `alert` (an error message), `status` (a notice).
    */
   role: string;
-  /** The name, or the text itself for `text`, `alert` and `status`. */
+  /**
+   * The name, or the text itself for `text`, `alert` and `status`. An `alert` or `status` that
+   * holds controls (a live region around a form, say) has them as `children` instead.
+   */
   name?: string;
   /** Current value of a field, or the chosen option. Never present for passwords. */
   value?: string;
@@ -137,7 +140,11 @@ export interface TurnRequest {
   conversation: Item[];
   /** The user's language, e.g. `zh-CN`. */
   locale?: string;
-  /** Attributes the host app knows about the user, e.g. role or plan. */
+  /**
+   * Attributes the host app knows about the user, e.g. role or plan. Sent by the browser, so
+   * anyone can change them; the backend can replace them from its own session (`createHandler`'s
+   * `user` option).
+   */
   user?: Record<string, unknown>;
 }
 

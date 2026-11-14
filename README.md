@@ -98,6 +98,7 @@ const handler = createHandler({
   instructions: '你是「数据平台」的应用内助手，帮用户上手和解决使用中的问题。',
   docs: await markdownDocs('./docs'),   // 你的产品文档（Markdown），可选
   basePath: '/doccue',
+  user: (request) => sessionOf(request)?.attributes,   // 用户属性从你自己的会话取，可选
 });
 
 // Express / Connect / node:http；Fetch 风格的框架（Hono、Next.js 路由等）直接用 handler
@@ -120,6 +121,8 @@ await cue.ask('为什么连不上？');   // 回答需要指给用户看时，br
 cue.stop();     // 停止当前回答，关掉页面上的引导
 cue.reset();    // 开始新对话
 ```
+
+请求体（问题、界面、对话记录、bridge 的 `user`）全部来自浏览器，可信程度和用户自己打的字一样。角色、套餐这类要作数的属性用 `createHandler` 的 `user` 从服务端会话里取，它会覆盖浏览器发来的那份。
 
 问答框本身要加 `data-cue-ignore`，免得用户在里面打字也被当成操作记下来。bridge 平时只在浏览器本地记录，提问时才上传；密码只记"填写过"，不记内容。
 

@@ -1,11 +1,15 @@
-import type { Item, Perception, StreamEvent, TurnRequest } from '@doccue/protocol';
+import type { Item, Perception, ScreenNode, StreamEvent, TurnRequest } from '@doccue/protocol';
+import { createServer } from 'node:http';
+import { connect, type AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import { respond } from '../src/agent/respond.js';
+import type { DocsProvider } from '../src/docs/docs.js';
 import { createMemoryLog } from '../src/log/log.js';
 import type { Tool } from '../src/loop/types.js';
 import { parseSSE } from '../src/model/sse.js';
 import { parseTurnRequest } from '../src/protocol/parse.js';
 import { createHandler } from '../src/server/handler.js';
+import { toNodeHandler } from '../src/server/node.js';
 import { collect } from './helpers.js';
 import { realModel, rejectedModel } from './model.js';
 
@@ -196,5 +200,90 @@ describe('parseTurnRequest', () => {
       ok: false,
       errors: ['conversation: the last item must be a question or a guide result'],
     });
+  });
+
+  it('checks the stored model messages, the screen, the actions and guide results all the way down', () => {
+    const screen = { page: { path: '/' }, nodes: [{ role: 'form', children: [{ role: 'button', name: 7 }] }] };
+    const perception = { at: 1, screen, actions: [{ at: 1, action: { type: 'tap' }, effects: [{ type: 'oops' }] }] };
+    const result = parseTurnRequest({
+      v: 1,
+      locale: 'zh-CN"><x',
+      conversation: [
+        { type: 'model', messages: [{ role: 'assistant', content: 'bad' }, { role: 'tool', results: [{ callId: 'c1', content: 3 }] }, null] },
+        { type: 'user', text: 'hi', perception },
+        { type: 'guide_result', callId: 'c1', result: { outcome: 'done', completedSteps: 1, perception: { ...perception, actions: [] } } },
+      ],
+    });
+    expect(result).toEqual({
+      ok: false,
+      errors: [
+        'locale: expected a language tag such as "zh-CN"',
+        'conversation[0].messages[0].content: expected an array',
+        'conversation[0].messages[1].results[0].content: expected a string or an array',
+        'conversation[0].messages[2]: expected an object',
+        'conversation[1].perception.actions[0].action.type: expected one of "click", "input", "select", "check", "uncheck", "submit"',
+        'conversation[1].perception.actions[0].effects[0].type: expected one of "error", "notice", "dialog", "navigate", "request_failed", "script_error"',
+        'conversation[1].perception.screen.nodes[0].children[0].name: expected a string',
+        'conversation[2].result.outcome: expected one of "completed", "deviated", "not_found", "interrupted", "exited"',
+        'conversation[2].result.perception.screen.nodes[0].children[0].name: expected a string',
+      ],
+    });
+  });
+
+  it('refuses screens nested deeper than any page', () => {
+    let node: ScreenNode = { role: 'button' };
+    for (let i = 0; i < 10_000; i++) node = { role: 'group', children: [node] };
+    const result = parseTurnRequest(ask('hi', { at: 1, actions: [], screen: { page: { path: '/' }, nodes: [node] } }));
+    expect(result.ok).toBe(false);
+    expect(result.ok ? [] : result.errors[0]).toMatch(/nested more than 64 levels deep$/);
+  });
+});
+
+describe('createHandler when things go wrong', () => {
+  it('still ends the stream with an end event when something throws, and logs what it was', async () => {
+    const { logger, records } = createMemoryLog();
+    const docs: DocsProvider = {
+      toc: () => {
+        throw new Error('docs index missing');
+      },
+      search: async () => [],
+      read: async () => undefined,
+    };
+    const handler = createHandler({ model: rejectedModel(), docs, basePath: '/doccue', logger });
+    const events = await readEvents(await handler(post(ask('hi'))));
+    expect(events).toEqual([{ type: 'end', reason: 'error', item: { type: 'model', messages: [] }, usage: expect.any(Object), error: { message: 'internal error' } }]);
+    expect(records.at(-1)).toMatchObject({ kind: 'end', reason: 'error', error: { message: 'docs index missing' } });
+  });
+
+  it('replaces the user the browser sent with the one from the session', async () => {
+    const { logger, records } = createMemoryLog();
+    const handler = createHandler({ model: rejectedModel(), basePath: '/doccue', logger, user: () => ({ role: 'viewer' }) });
+    await readEvents(await handler(post({ ...ask('hi'), user: { role: 'admin' } })));
+    const request = records.find((record) => record.kind === 'request');
+    expect(request).toMatchObject({ request: { user: { role: 'viewer' } } });
+  });
+});
+
+describe('toNodeHandler', () => {
+  it('answers a request it cannot read with 400 instead of rejecting', async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onRejection);
+    const server = createServer((req, res) => void toNodeHandler(createHandler({ model: rejectedModel(), basePath: '/doccue' }))(req, res));
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
+      socket.write('POST /doccue/turn HTTP/1.1\r\nHost: bad host\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}');
+      const reply = await new Promise<string>((resolve) => {
+        let data = '';
+        socket.on('data', (chunk) => (data += chunk));
+        socket.on('close', () => resolve(data));
+      });
+      expect(reply).toMatch(/^HTTP\/1\.1 400 /);
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onRejection);
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

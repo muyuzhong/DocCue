@@ -196,12 +196,48 @@ describe('runTurn on recorded API responses', () => {
     expect(end.messages).toEqual([]);
   });
 
+  const tool = (index: number, id: string, name: string, json: string) => [
+    ev('content_block_start', { index, content_block: { type: 'tool_use', id, name, input: {} } }),
+    ev('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: json } }),
+    ev('content_block_stop', { index }),
+  ];
+
+  it('when stopped while a backend tool runs, also answers the page call made alongside it', async () => {
+    const { fetch } = mockFetch(
+      sseResponse([
+        start,
+        ...tool(0, 'toolu_1', 'highlight', '{"target": 7}'),
+        ...tool(1, 'toolu_2', 'fetch_report', '{}'),
+        ev('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 9 } }),
+        ev('message_stop', {}),
+      ]),
+    );
+    const highlight: Tool = { name: 'highlight', description: 'Highlights an element.', parameters: { type: 'object', properties: {} } };
+    const slow: Tool = {
+      name: 'fetch_report',
+      description: 'Fetches the monthly report.',
+      parameters: { type: 'object', properties: {} },
+      execute: () => new Promise(() => {}),
+    };
+    const { end } = await runTurnToEnd({
+      model: createAnthropic({ apiKey: 'k', model: 'claude-haiku-5-5', fetch }),
+      messages: [user('q')],
+      tools: [highlight, slow],
+      timeoutMs: 100,
+    });
+    expect(end.reason).toBe('timeout');
+    expect(end.pageCall).toBeUndefined();
+    // Every call has its result, so the stored history stays valid for the next request.
+    expect(end.messages.at(-1)).toEqual({
+      role: 'tool',
+      results: [
+        { callId: 'toolu_1', content: 'Cancelled: the turn was stopped before this tool ran.', isError: true },
+        { callId: 'toolu_2', content: 'Cancelled: the turn was stopped while this tool was running.', isError: true },
+      ],
+    });
+  });
+
   it('answers calls to unknown tools and calls with broken JSON with an error result', async () => {
-    const tool = (index: number, id: string, name: string, json: string) => [
-      ev('content_block_start', { index, content_block: { type: 'tool_use', id, name, input: {} } }),
-      ev('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: json } }),
-      ev('content_block_stop', { index }),
-    ];
     const { fetch, calls } = mockFetch(
       sseResponse([
         start,

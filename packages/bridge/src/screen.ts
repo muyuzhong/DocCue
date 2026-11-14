@@ -7,7 +7,7 @@
 import type { Screen, ScreenNode } from '@doccue/protocol';
 import { clean, clip, isIgnored, isVisible, textOf } from './dom.js';
 import { NOTICE_SELECTOR } from './errors.js';
-import { accessibleName, dialogTitle, isInteractive, roleOf } from './naming.js';
+import { accessibleName, dialogTitle, hasControlInside, isInteractive, roleOf } from './naming.js';
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'META', 'LINK', 'OPTION']);
 const TEXT_TAGS = new Set(['P', 'LI', 'TD', 'TH', 'SPAN', 'DIV', 'DD', 'DT', 'SMALL', 'STRONG', 'EM', 'B', 'CAPTION', 'FIGCAPTION', 'BLOCKQUOTE', 'PRE', 'CODE']);
@@ -119,18 +119,16 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
       add(out, controlNode(element), element);
       return;
     }
-    if (errorSelector && element.matches(errorSelector)) {
+    const message = errorSelector && element.matches(errorSelector) ? 'alert' : element.matches(NOTICE_SELECTOR) ? 'status' : undefined;
+    // A message is listed as its text. A live region around controls (a whole panel marked
+    // aria-live, say) is a group instead, or the controls in it would be lost.
+    if (message && !hasControlInside(element)) {
       const text = textOf(element);
-      if (text) add(out, { role: 'alert', name: clip(text, 200) });
-      return;
-    }
-    if (element.matches(NOTICE_SELECTOR)) {
-      const text = textOf(element);
-      if (text) add(out, { role: 'status', name: clip(text, 200) });
+      if (text) add(out, { role: message, name: clip(text, 200) });
       return;
     }
 
-    const group = groupNode(element);
+    const group = message ? { role: message } : groupNode(element);
     const added = group ? add(out, group, element) : undefined;
     const children: ScreenNode[] = [];
     const childOut = added ? children : out;
