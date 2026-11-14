@@ -158,7 +158,9 @@ describe('respond with the real model', () => {
 describe('createHandler', () => {
   it('answers POST {base}/turn with the answer as server-sent events', async () => {
     const handler = createHandler({ model: realModel(), instructions: INSTRUCTIONS, basePath: '/doccue/' });
-    const response = await handler(post(ask('只回答一个字：好')));
+    // A page with nothing wrong on it: an error on screen invites a guide instead of words.
+    const calm: Perception = { at: Date.now(), screen: { page: { path: '/dashboard', title: '仪表盘' }, nodes: [{ ref: 1, role: 'heading', name: '仪表盘' }] }, actions: [] };
+    const response = await handler(post(ask('只回答一个字：好', calm)));
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/event-stream');
     const events = await readEvents(response);
