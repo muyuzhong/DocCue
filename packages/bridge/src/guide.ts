@@ -18,6 +18,8 @@ export interface GuideOptions {
   /** The element of a step right now, or `undefined` while it is not on the page. */
   find: (index: number) => Element | undefined;
   messages: Messages;
+  /** Colours of the bubble. Defaults to `light`. */
+  theme?: Theme;
   /** How long to wait for a step's element before giving up. */
   waitMs: number;
   /** Where to start, when a guide continues after a page reload. */
@@ -35,17 +37,30 @@ export interface RunningGuide {
   stop(): Omit<GuideEnd, 'outcome'>;
 }
 
+/** Colours of the bridge's UI: light, dark, or following the system. */
+export type Theme = 'light' | 'dark' | 'auto';
+
+/** Colours of the bridge's UI, light and dark; shared with the chat panel. */
+export const THEME_COLOURS = `
+.themed { --bg: #fff; --fg: #111827; --muted: #6b7280; --line: #d1d5db; --soft: #f3f4f6; --button: #fff; --accent: var(--doccue-accent, #2563eb); color-scheme: light; }
+.themed[data-theme="dark"] { --bg: #1f2937; --fg: #f3f4f6; --muted: #9ca3af; --line: #4b5563; --soft: #374151; --button: #374151; color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  .themed[data-theme="auto"] { --bg: #1f2937; --fg: #f3f4f6; --muted: #9ca3af; --line: #4b5563; --soft: #374151; --button: #374151; color-scheme: dark; }
+}
+`;
+
 // One below the chat panel, so its bar stays clear of the dimming.
 const STYLE = `
 :host { all: initial; }
+${THEME_COLOURS}
 .layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483646; font: 14px/1.5 system-ui, sans-serif; }
 .spot { position: fixed; border-radius: 6px; box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.45), 0 0 0 2px #4f8cff; transition: all 0.15s ease-out; }
-.bubble { position: fixed; pointer-events: auto; box-sizing: border-box; width: max-content; max-width: 320px; padding: 12px 14px; border-radius: 10px; background: #fff; color: #111827; box-shadow: 0 8px 28px rgba(15, 23, 42, 0.28); }
+.bubble { position: fixed; pointer-events: auto; box-sizing: border-box; width: max-content; max-width: 320px; padding: 12px 14px; border-radius: 10px; background: var(--bg); color: var(--fg); box-shadow: 0 8px 28px rgba(15, 23, 42, 0.28); }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .foot { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
-.progress { flex: 1; color: #6b7280; font-size: 12px; }
-button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid #d1d5db; background: #fff; color: #111827; cursor: pointer; }
-button.next { border-color: #2563eb; background: #2563eb; color: #fff; }
+.progress { flex: 1; color: var(--muted); font-size: 12px; }
+button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--button); color: var(--fg); cursor: pointer; }
+button.next { border-color: var(--accent); background: var(--accent); color: #fff; }
 [hidden] { display: none; }
 `;
 
@@ -139,7 +154,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
   host.setAttribute('data-doccue-guide', '');
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLE}</style>
-    <div class="layer" data-cue-ignore>
+    <div class="layer themed" data-theme="${options.theme ?? 'light'}" data-cue-ignore>
       <div class="spot" hidden></div>
       <div class="bubble" role="dialog" hidden>
         <div class="text"></div>

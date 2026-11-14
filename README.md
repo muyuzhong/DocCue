@@ -114,7 +114,7 @@ const cue = createBridge({ endpoint: '/doccue' });   // 从这一行开始记录
 await cue.mount();                                   // 右下角的问答窗
 ```
 
-问答窗在 Shadow DOM 里，不受页面样式影响；位置和主色用 CSS 变量调（`--doccue-right`、`--doccue-bottom`、`--doccue-accent`），文案跟随页面语言（现在有中文和英文），可以用 `createBridge({ messages: { title: '数据平台助手' } })` 改任何一条。
+问答窗在 Shadow DOM 里，不受页面样式影响；位置和主色用 CSS 变量调（`--doccue-right`、`--doccue-bottom`、`--doccue-accent`），深色主题用 `createBridge({ theme: 'dark' })`（或 `'auto'` 跟随系统），手机上打开时占满屏幕。文案跟随页面语言（现在有中文和英文），可以用 `createBridge({ messages: { title: '数据平台助手' } })` 改任何一条。
 
 想用自己的问答框也可以，不调 `mount()`，在这几个接口上搭：
 

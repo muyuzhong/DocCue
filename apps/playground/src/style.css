@@ -323,9 +323,11 @@ th {
   padding: 6px 8px;
 }
 
-/* The chat panel floats over the main area, clear of the debug column. */
-:root {
-  --doccue-right: 424px;
+/* The chat panel floats over the main area, clear of the debug column (only wide screens have one). */
+@media (min-width: 900px) {
+  :root {
+    --doccue-right: 424px;
+  }
 }
 
 .notice {

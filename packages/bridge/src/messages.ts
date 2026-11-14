@@ -31,6 +31,8 @@ export interface Messages {
   /** The backend turned the conversation away (too long, or no longer valid). */
   failedConversation: string;
   refused: string;
+  /** At the top of a long conversation whose oldest lines are no longer shown. */
+  earlier: string;
 }
 
 const MESSAGES: Record<string, Messages> = {
@@ -56,6 +58,7 @@ const MESSAGES: Record<string, Messages> = {
     failed: 'Something went wrong. Please try again.',
     failedConversation: "This conversation can't go on. Please start a new one with the button at the top.",
     refused: "I can't help with that.",
+    earlier: 'Earlier messages are not shown.',
   },
   zh: {
     next: '下一步',
@@ -79,6 +82,7 @@ const MESSAGES: Record<string, Messages> = {
     failed: '出错了，请稍后再试。',
     failedConversation: '这段对话没法继续了，请点右上角开始新对话。',
     refused: '这个问题我没法回答。',
+    earlier: '更早的消息没有显示。',
   },
 };
 

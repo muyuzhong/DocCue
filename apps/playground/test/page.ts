@@ -58,8 +58,8 @@ export interface UserPage {
   finishGuides(): Promise<void>;
 }
 
-export async function openPage(playground: Playground, path: string): Promise<UserPage> {
-  const context = await playground.browser.newContext({ viewport: { width: 1440, height: 900 } });
+export async function openPage(playground: Playground, path: string, viewport = { width: 1440, height: 900 }): Promise<UserPage> {
+  const context = await playground.browser.newContext({ viewport });
   const page = await context.newPage();
   const posts: TurnRequest[] = [];
   page.on('request', (request) => {

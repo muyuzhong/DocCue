@@ -21,7 +21,7 @@ import {
 } from '@doccue/protocol';
 import { isVisible } from './dom.js';
 import { DEFAULT_ERROR_SELECTORS } from './errors.js';
-import { runGuide, type GuideEnd, type RunningGuide } from './guide.js';
+import { runGuide, type GuideEnd, type RunningGuide, type Theme } from './guide.js';
 import { describeElement, findByLocator } from './locate.js';
 import { messagesFor, type Messages } from './messages.js';
 import type { Panel, PanelOptions } from './panel/panel.js';
@@ -37,6 +37,8 @@ export interface BridgeOptions {
   locale?: string;
   /** Your own wording for the bridge's UI (the guide's bubble and the chat panel), on top of the language's. */
   messages?: Partial<Messages>;
+  /** Colours of the bridge's UI: `light` (the default), `dark`, or `auto` to follow the system. */
+  theme?: Theme;
   /**
    * What the host app knows about the user, e.g. role or plan. Anyone can change what the browser
    * sends: for anything that must hold, set it on the backend instead (`createHandler`'s `user`).
@@ -105,10 +107,17 @@ export interface Bridge {
   busy(): boolean;
   /** Whether a guide is on screen. */
   guiding(): boolean;
+  /**
+   * How the last question failed, if it did and nothing was asked since: for a UI that comes up
+   * after the `error` event, e.g. a panel still loading when a request resumed on page load failed.
+   */
+  lastError(): { message: string; status?: number } | undefined;
   /** The words the bridge's UI uses, in the user's language. */
   readonly messages: Messages;
   /** Longest question `ask` accepts. */
   readonly maxQuestionChars: number;
+  /** Colours of the bridge's UI. */
+  readonly theme: Theme;
   /**
    * Puts the built-in chat panel on the page: a round button in the corner that opens it. Loaded
    * on first use. Without it, build your own UI on `ask`, `stop`, `reset` and `on`.
@@ -386,6 +395,7 @@ export function createBridge(options: BridgeOptions): Bridge {
         document,
         steps: state.steps,
         messages,
+        theme: options.theme ?? 'light',
         waitMs: options.targetWaitMs ?? 3000,
         start: progressOf(state),
         onProgress: (progress) => {
@@ -446,13 +456,16 @@ export function createBridge(options: BridgeOptions): Bridge {
     }
   }
 
+  /** How the last question failed; cleared by the next question and by a reset. */
+  let failure: { message: string; status?: number } | undefined;
+
   /** Tells listeners a question could not be answered. */
   function fail(error: unknown): void {
-    emit({
-      type: 'error',
+    failure = {
       message: error instanceof Error ? error.message : String(error),
       ...(error instanceof BridgeError && error.status !== undefined ? { status: error.status } : {}),
-    });
+    };
+    emit({ type: 'error', ...failure });
   }
 
   /** The question is done with: answered, stopped or failed. */
@@ -479,6 +492,7 @@ export function createBridge(options: BridgeOptions): Bridge {
 
   const bridge: Bridge = {
     async ask(question) {
+      failure = undefined;
       if (question.length > maxQuestionChars) {
         const error = new BridgeError(`DocCue: the question is longer than ${maxQuestionChars} characters`);
         fail(error);
@@ -497,6 +511,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       if (running) finished();
     },
     reset() {
+      failure = undefined;
       running?.abort();
       guide?.run?.stop();
       guide = undefined;
@@ -514,8 +529,10 @@ export function createBridge(options: BridgeOptions): Bridge {
     },
     busy: () => running !== undefined,
     guiding: () => guide?.showing === true,
+    lastError: () => failure,
     messages,
     maxQuestionChars,
+    theme: options.theme ?? 'light',
     async mount(panelOptions) {
       const { mountPanel } = await import('./panel/panel.js');
       return mountPanel(bridge, { document, ...panelOptions });

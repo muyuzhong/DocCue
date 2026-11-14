@@ -12,6 +12,7 @@
  * `--doccue-left`), `--doccue-bottom`, `--doccue-accent`, `--doccue-z`.
  */
 import type { Bridge, BridgeEvent } from '../bridge.js';
+import { THEME_COLOURS } from '../guide.js';
 import { escapeHtml, renderMarkdown } from './markdown.js';
 
 export interface PanelOptions {
@@ -36,6 +37,8 @@ interface Line {
 }
 
 const LINES_KEY = 'doccue:panel:lines';
+/** Lines kept and shown; older ones go, and the panel says so. */
+const MAX_LINES = 200;
 const OPEN_KEY = 'doccue:panel:open';
 
 const DOC_TOOLS = new Set(['search_docs', 'read_doc']);
@@ -49,41 +52,49 @@ const ICON_NEW =
 const STYLE = `
 :host { all: initial; position: fixed; bottom: var(--doccue-bottom, 20px); right: var(--doccue-right, 20px); z-index: var(--doccue-z, 2147483647); }
 :host([data-side="left"]) { right: auto; left: var(--doccue-left, 20px); }
-.root { --accent: var(--doccue-accent, #2563eb); font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: #111827; }
+${THEME_COLOURS}
+.root { font: 14px/1.55 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--fg); }
 [hidden] { display: none !important; }
 button { font: inherit; cursor: pointer; }
 .launcher { width: 54px; height: 54px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; display: grid; place-items: center; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.25); }
 .launcher:hover { filter: brightness(1.08); }
-.panel { box-sizing: border-box; width: min(380px, calc(100vw - 24px)); height: min(600px, calc(100vh - 40px)); display: flex; flex-direction: column; background: #fff; border-radius: 14px; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25); overflow: hidden; }
-header { display: flex; align-items: center; gap: 4px; padding: 12px 10px 12px 16px; border-bottom: 1px solid #e5e7eb; }
+.panel { box-sizing: border-box; width: min(380px, calc(100vw - 24px)); height: min(600px, calc(100vh - 40px)); display: flex; flex-direction: column; background: var(--bg); border-radius: 14px; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25); overflow: hidden; }
+header { display: flex; align-items: center; gap: 4px; padding: 12px 10px 12px 16px; border-bottom: 1px solid var(--line); }
 header strong { flex: 1; font-size: 15px; }
-.icon { border: 0; background: none; color: #6b7280; width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; }
-.icon:hover { background: #f3f4f6; color: #111827; }
+.icon { border: 0; background: none; color: var(--muted); width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; }
+.icon:hover { background: var(--soft); color: var(--fg); }
 .messages { flex: 1; overflow-y: auto; padding: 14px 14px 6px; display: flex; flex-direction: column; gap: 10px; }
-.greeting { color: #6b7280; font-size: 13px; padding: 4px 2px; }
+.greeting, .earlier { color: var(--muted); font-size: 13px; padding: 4px 2px; }
+.earlier { align-self: center; font-size: 12px; }
 .message { max-width: 88%; padding: 8px 12px; border-radius: 12px; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; background: var(--accent); color: #fff; white-space: pre-wrap; }
-.message.assistant { align-self: flex-start; background: #f3f4f6; }
-.message.note, .message.error { align-self: center; padding: 0; background: none; font-size: 12px; color: #6b7280; }
-.message.error { color: #b91c1c; }
+.message.assistant { align-self: flex-start; background: var(--soft); }
+.message.note, .message.error { align-self: center; padding: 0; background: none; font-size: 12px; color: var(--muted); }
+.message.error { color: #dc2626; }
 .message p { margin: 0 0 6px; } .message p:last-child { margin-bottom: 0; }
 .message ul, .message ol { margin: 4px 0; padding-left: 20px; }
-.message code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(15, 23, 42, 0.07); padding: 1px 4px; border-radius: 4px; }
-.message pre { margin: 6px 0; padding: 8px; background: rgba(15, 23, 42, 0.07); border-radius: 6px; overflow-x: auto; }
+.message code { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(127, 127, 127, 0.15); padding: 1px 4px; border-radius: 4px; }
+.message pre { margin: 6px 0; padding: 8px; background: rgba(127, 127, 127, 0.15); border-radius: 6px; overflow-x: auto; }
 .message pre code { background: none; padding: 0; }
-.status { color: #6b7280; font-size: 13px; }
+.message a { color: var(--accent); }
+.message .site { color: var(--muted); font-size: 12px; }
+.status { color: var(--muted); font-size: 13px; }
 .message .status { display: block; margin-top: 4px; }
-.composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px 12px; border-top: 1px solid #e5e7eb; }
-textarea { flex: 1; box-sizing: border-box; resize: none; min-height: 40px; max-height: 120px; padding: 9px 11px; border: 1px solid #d1d5db; border-radius: 10px; font: inherit; color: inherit; outline: none; }
+.composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+textarea { flex: 1; box-sizing: border-box; resize: none; min-height: 40px; max-height: 120px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font: inherit; color: inherit; outline: none; }
 textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
 .send, .stop { height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: #fff; }
-.stop { background: #fff; color: #111827; border-color: #d1d5db; }
+.stop { background: var(--button); color: var(--fg); border-color: var(--line); }
 .send:disabled { opacity: 0.45; cursor: default; }
-.bar { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; background: #fff; border-radius: 999px; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.22); }
+.bar { display: flex; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; background: var(--bg); border-radius: 999px; box-shadow: 0 6px 20px rgba(15, 23, 42, 0.22); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.3; } }
-.bar button { border: 1px solid #d1d5db; background: #fff; border-radius: 999px; padding: 4px 12px; font-size: 13px; color: #111827; }
+.bar button { border: 1px solid var(--line); background: var(--button); border-radius: 999px; padding: 4px 12px; font-size: 13px; color: var(--fg); }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+/* Phones: the open panel takes the whole screen. */
+@media (max-width: 480px) {
+  .panel { position: fixed; inset: 0; width: 100vw; height: 100dvh; border-radius: 0; }
+}
 `;
 
 function store(): Storage | undefined {
@@ -131,7 +142,7 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
   if (options.side === 'left') host.setAttribute('data-side', 'left');
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>${STYLE}</style>
-    <div class="root" data-cue-ignore>
+    <div class="root themed" data-theme="${bridge.theme}" data-cue-ignore>
       <button type="button" class="launcher" aria-label="${escapeHtml(t.open)}" title="${escapeHtml(t.open)}">${ICON_CHAT}</button>
       <section class="panel" role="dialog" aria-label="${escapeHtml(t.title)}" hidden>
         <header>
@@ -182,8 +193,23 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
     return element;
   };
 
+  /** Whether older lines were dropped. */
+  let dropped = load<boolean>(`${LINES_KEY}:dropped`, false) && lines.length > 0;
+  if (lines.length > MAX_LINES) {
+    lines = lines.slice(-MAX_LINES);
+    dropped = true;
+  }
+
+  const earlierNote = () => {
+    const note = document.createElement('div');
+    note.className = 'earlier';
+    note.textContent = t.earlier;
+    return note;
+  };
+
   const drawAll = () => {
     list.replaceChildren();
+    if (dropped) list.append(earlierNote());
     if (lines.length === 0) {
       const greeting = document.createElement('div');
       greeting.className = 'greeting';
@@ -197,6 +223,15 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
   const add = (line: Line) => {
     if (lines.length === 0) list.replaceChildren();
     lines = [...lines, line];
+    if (lines.length > MAX_LINES) {
+      lines = lines.slice(-MAX_LINES);
+      dropped = true;
+      save(`${LINES_KEY}:dropped`, true);
+      // Drop the oldest line on screen too (after the note, if it is there).
+      const oldest = list.querySelector('.message');
+      oldest?.remove();
+      if (!list.querySelector('.earlier')) list.prepend(earlierNote());
+    }
     save(LINES_KEY, lines);
     list.append(lineElement(line));
     scroll();
@@ -229,6 +264,11 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
     if (text.trim()) add({ role: 'assistant', text });
   };
 
+  const showFailure = (failure: { status?: number }) => {
+    settle();
+    add({ role: 'error', text: failure.status === 400 || failure.status === 413 ? t.failedConversation : t.failed });
+  };
+
   const handlers: { [K in BridgeEvent['type']]?: (event: Extract<BridgeEvent, { type: K }>) => void } = {
     status: (event) => showStatus(event.state === 'tool' ? (DOC_TOOLS.has(event.tool ?? '') ? t.readingDocs : t.working) : t.thinking),
     text: (event) => {
@@ -243,10 +283,7 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
       else if (event.reason === 'refusal') add({ role: 'note', text: t.refused });
       else if (event.reason === 'error' || event.reason === 'timeout' || event.reason === 'max_steps') add({ role: 'error', text: t.failed });
     },
-    error: (event) => {
-      settle();
-      add({ role: 'error', text: event.status === 400 || event.status === 413 ? t.failedConversation : t.failed });
-    },
+    error: (event) => showFailure(event),
     guide_start: () => {
       expanded = false;
       layout();
@@ -263,7 +300,9 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
     reset: () => {
       pending = undefined;
       lines = [];
+      dropped = false;
       save(LINES_KEY, lines);
+      save(`${LINES_KEY}:dropped`, false);
       drawAll();
       layout();
     },
@@ -328,6 +367,9 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
 
   document.body.append(host);
   drawAll();
+  // A question that failed before the panel was here (a request resumed on page load, say).
+  const failed = bridge.lastError();
+  if (failed && !bridge.busy()) showFailure(failed);
   layout();
 
   return {

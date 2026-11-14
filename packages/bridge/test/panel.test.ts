@@ -107,3 +107,71 @@ describe('the chat panel', () => {
     expect(bridge.conversation()).toEqual([]);
   });
 });
+
+describe('links in answers', () => {
+  it('opens http(s) links in a new tab, showing the site when the text says something else', () => {
+    expect(renderMarkdown('见[连接问题排查](https://docs.example.com/troubleshooting)。')).toBe(
+      '<p>见<a href="https://docs.example.com/troubleshooting" target="_blank" rel="noopener noreferrer nofollow">连接问题排查</a><span class="site"> · docs.example.com</span>。</p>',
+    );
+    expect(renderMarkdown('文档在 https://docs.example.com/a?b=1&c=2。')).toBe(
+      '<p>文档在 <a href="https://docs.example.com/a?b=1&amp;c=2" target="_blank" rel="noopener noreferrer nofollow">https://docs.example.com/a?b=1&amp;c=2</a>。</p>',
+    );
+  });
+
+  it('leaves addresses inside `code` alone', () => {
+    expect(renderMarkdown('不要带协议头，比如 `http://`、`mysql://` 都不行，见 https://docs.example.com。')).toBe(
+      '<p>不要带协议头，比如 <code>http://</code>、<code>mysql://</code> 都不行，见 <a href="https://docs.example.com/" target="_blank" rel="noopener noreferrer nofollow">https://docs.example.com</a>。</p>',
+    );
+  });
+
+  it('leaves anything that is not http(s) as text', () => {
+    expect(renderMarkdown('[点我](javascript:alert(1))')).toBe('<p>[点我](javascript:alert(1))</p>');
+    expect(renderMarkdown('[文件](file:///etc/passwd) ![图](https://x.example/a.png)')).not.toMatch(/<a href="file|<img/);
+    expect(renderMarkdown('[x](https://ok.example/"onmouseover="alert(1))')).not.toContain('"onmouseover');
+  });
+});
+
+describe('the panel in other settings', () => {
+  let bridge: Bridge;
+  let panel: Panel | undefined;
+  const shadow = () => document.querySelector('[data-doccue-panel]')!.shadowRoot!;
+  beforeEach(() => {
+    sessionStorage.clear();
+    document.body.innerHTML = '<h1>仪表盘</h1>';
+  });
+  afterEach(() => {
+    panel?.unmount();
+    bridge.destroy();
+  });
+
+  it('takes the theme for the panel and the guide', async () => {
+    bridge = createBridge({ endpoint: '/doccue', theme: 'dark' });
+    panel = await bridge.mount();
+    expect(shadow().querySelector('.root')!.getAttribute('data-theme')).toBe('dark');
+    const { runGuide } = await import('../src/guide.js');
+    const guide = runGuide({ document, steps: [{ target: 1, text: '这里' }], find: () => document.querySelector('h1') ?? undefined, messages: bridge.messages, theme: bridge.theme, waitMs: 100 });
+    expect(document.querySelector('[data-doccue-guide]')!.shadowRoot!.querySelector('.layer')!.getAttribute('data-theme')).toBe('dark');
+    guide.stop();
+  });
+
+  it('shows a failure that happened before it was mounted, once', async () => {
+    // Nothing listens on port 9 of this machine.
+    bridge = createBridge({ endpoint: 'http://127.0.0.1:9/doccue' });
+    await bridge.ask('你好').catch(() => {});
+    expect(bridge.lastError()).toBeDefined();
+    panel = await bridge.mount({ open: true });
+    expect(Array.from(shadow().querySelectorAll('.message.error')).map((line) => line.textContent)).toEqual(['出错了，请稍后再试。']);
+  });
+
+  it('shows the latest 200 lines of a long conversation, and says older ones are not shown', async () => {
+    const lines = Array.from({ length: 250 }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', text: `第 ${i} 句` }));
+    sessionStorage.setItem('doccue:panel:lines', JSON.stringify(lines));
+    sessionStorage.setItem('doccue:conversation', JSON.stringify([{ type: 'user', text: 'x', perception: { at: 0, screen: { page: { path: '/' }, nodes: [] }, actions: [] } }]));
+    bridge = createBridge({ endpoint: '/doccue' });
+    panel = await bridge.mount({ open: true });
+    const shown = shadow().querySelectorAll('.message');
+    expect(shown).toHaveLength(200);
+    expect(shown[0]!.textContent).toBe('第 50 句');
+    expect(shadow().querySelector('.earlier')!.textContent).toBe('更早的消息没有显示。');
+  });
+});

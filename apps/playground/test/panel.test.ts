@@ -76,4 +76,10 @@ describe('the chat panel', () => {
     await user.idle();
     expect(await user.page.locator(`${PANEL} .message.error`).last().innerText()).toBe('这段对话没法继续了，请点右上角开始新对话。');
   });
+
+  it('takes the whole screen on a phone', async () => {
+    const user = await openPage(playground, '/dashboard', { width: 390, height: 844 });
+    await user.page.locator(`${PANEL} .launcher`).click();
+    expect(await user.page.locator(`${PANEL} .panel`).boundingBox()).toEqual({ x: 0, y: 0, width: 390, height: 844 });
+  });
 });
