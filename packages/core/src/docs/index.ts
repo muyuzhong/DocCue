@@ -1,1 +1,1 @@
-export { createDocs, docsPrompt, docsTools, terms, type DocFile, type DocHit, type DocsOptions, type DocsProvider } from './docs.js';
+export { createDocs, docsPrompt, docsTools, splitText, terms, type DocFile, type DocHit, type DocsOptions, type DocsProvider, type DocsToolOptions } from './docs.js';

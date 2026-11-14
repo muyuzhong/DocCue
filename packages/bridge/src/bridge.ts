@@ -210,7 +210,7 @@ export function createBridge(options: BridgeOptions): Bridge {
   let unsent = load<TimelineEntry[]>(UNSENT_KEY, []);
   const interrupted = load<GuideState | undefined>(GUIDE_KEY, undefined);
   /** The guide on screen (`run` is set), or one a page load interrupted that is about to be resumed. */
-  let guide: { state: GuideState; run?: RunningGuide } | undefined = interrupted ? { state: interrupted } : undefined;
+  let guide: { state: GuideState; run?: RunningGuide; showing?: boolean } | undefined = interrupted ? { state: interrupted } : undefined;
   /** After `destroy`, nothing more is written: what is in storage is for the next page. */
   let destroyed = false;
   /**
@@ -219,7 +219,6 @@ export function createBridge(options: BridgeOptions): Bridge {
    * is still owed.
    */
   let leaving = false;
-  let stay: ReturnType<typeof setTimeout> | undefined;
 
   let running: AbortController | undefined;
   /** The elements behind the numbers of the screen sent last. */
@@ -264,12 +263,13 @@ export function createBridge(options: BridgeOptions): Bridge {
     save(LEFT_KEY, here());
     leaving = true;
   };
-  // Leaving starts here, before any request is cut off. If the page stays after all (a prompt
-  // said "stay"), timers still run and this wears off.
+  // Leaving starts here, before any request is cut off; the new page may take a while to come.
+  // If this page stays after all (a prompt said "stay"), the user's next input says so.
   const onBeforeUnload = () => {
     leaving = true;
-    clearTimeout(stay);
-    stay = setTimeout(() => (leaving = false), 3000);
+  };
+  const onInput = () => {
+    leaving = false;
   };
   // Back from the back/forward cache: this page goes on after all.
   const onReturn = (event: PageTransitionEvent) => {
@@ -278,6 +278,8 @@ export function createBridge(options: BridgeOptions): Bridge {
     save(LEFT_KEY, undefined);
   };
   document.defaultView?.addEventListener('beforeunload', onBeforeUnload);
+  document.addEventListener('pointerdown', onInput, true);
+  document.addEventListener('keydown', onInput, true);
   document.defaultView?.addEventListener('pagehide', onLeave);
   document.defaultView?.addEventListener('pageshow', onReturn);
 
@@ -376,6 +378,10 @@ export function createBridge(options: BridgeOptions): Bridge {
     let end: GuideEnd | undefined = { outcome: 'completed', ...progressOf(state) };
     // Otherwise the page was reloaded right after the last step: nothing left to show.
     if (state.completedSteps < state.steps.length) {
+      // Say so before the first step shows: the chat panel folds away first, so the bubble is
+      // placed once, with the room it will have.
+      shown.showing = true;
+      emit({ type: 'guide_start', steps: state.steps });
       const run = runGuide({
         document,
         steps: state.steps,
@@ -397,7 +403,6 @@ export function createBridge(options: BridgeOptions): Bridge {
         },
       });
       shown.run = run;
-      emit({ type: 'guide_start', steps: state.steps });
       end = await run.done;
     }
     // Stopped from outside (a new question, stop, reset): whoever did it wrote the result.
@@ -508,7 +513,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       return () => set.delete(listener as (event: BridgeEvent) => void);
     },
     busy: () => running !== undefined,
-    guiding: () => guide?.run !== undefined,
+    guiding: () => guide?.showing === true,
     messages,
     maxQuestionChars,
     async mount(panelOptions) {
@@ -521,9 +526,10 @@ export function createBridge(options: BridgeOptions): Bridge {
     destroy() {
       // Like the page going away: what is in storage stays for the next page.
       document.defaultView?.removeEventListener('beforeunload', onBeforeUnload);
+      document.removeEventListener('pointerdown', onInput, true);
+      document.removeEventListener('keydown', onInput, true);
       document.defaultView?.removeEventListener('pagehide', onLeave);
       document.defaultView?.removeEventListener('pageshow', onReturn);
-      clearTimeout(stay);
       recorder.stop();
       destroyed = true;
       listeners.clear();

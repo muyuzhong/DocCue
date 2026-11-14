@@ -22,12 +22,15 @@ describe('asking', () => {
     await user.ask(`主机地址这一栏有什么要求？${TEXT_ONLY}`);
     await user.finishGuides();
     const [first] = userItems(user.posts[0]!.conversation);
-    expect(first!.perception.actions.map((entry) => entry.action)).toEqual([
+    // The user's actions, in order. The page may add events of its own (a script error under
+    // load, say); those are fine to send too. The message shows them all if this fails.
+    const acted = first!.perception.actions.filter((entry) => entry.action);
+    expect(acted.map((entry) => entry.action), JSON.stringify(first!.perception.actions)).toEqual([
       { type: 'input', target: { role: 'textbox', name: '主机地址' }, value: 'http://127.0.0.1:5432' },
       { type: 'input', target: { role: 'textbox', name: '端口' }, value: '5432' },
       { type: 'click', target: { role: 'button', name: '测试连接' } },
     ]);
-    expect(first!.perception.actions.at(-1)!.effects).toContainEqual({ type: 'error', text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } });
+    expect(acted.at(-1)!.effects).toContainEqual({ type: 'error', text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } });
     expect(JSON.stringify(first!.perception.screen)).toContain('"name":"主机地址","value":"http://127.0.0.1:5432","states":["invalid"]');
     expect(user.posts[0]).toMatchObject({ v: 1, locale: 'zh-CN', user: { role: '新用户', plan: '试用版' } });
 

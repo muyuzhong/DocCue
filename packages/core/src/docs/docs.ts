@@ -38,6 +38,12 @@ export interface DocsOptions {
   inlineMaxChars?: number;
   /** Hits returned by a search. Defaults to 5. */
   maxHits?: number;
+  /**
+   * Largest table of contents put into the system prompt, in characters. Over it, deeper
+   * headings are left out level by level, then the list is cut; search finds the rest. Defaults
+   * to 4000.
+   */
+  maxTocChars?: number;
 }
 
 interface Section {
@@ -135,14 +141,42 @@ export function createDocs(files: readonly DocFile[], options: DocsOptions = {})
   const fullText = sorted.map((file) => `<doc path="${file.path}">\n${file.content.trim()}\n</doc>`).join('\n\n');
   const inlineMax = options.inlineMaxChars ?? 12000;
   const maxHits = options.maxHits ?? 5;
+  const maxToc = options.maxTocChars ?? 4000;
+
+  /** The table of contents down to `depth` levels of headings. */
+  const listed = (depth: number) =>
+    all
+      // A file's text before its first heading is listed under the file's name, unless there is none.
+      .filter((section) => section.level <= depth && (section.level > 0 || section.own.length > 0))
+      .map((section) => `${'  '.repeat(Math.max(0, section.level - 1))}- ${section.title} (${section.id})`);
+
+  /** A link to another doc, as the ID read_doc takes; `undefined` for links elsewhere. */
+  const linkTarget = (href: string, from: string): string | undefined => {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('/')) return undefined;
+    const [file = '', anchor] = href.split('#', 2);
+    const path = file ? resolvePath(from, decodeURIComponent(file)) : from;
+    const sections = all.filter((section) => section.id.startsWith(`${path}#`));
+    if (sections.length === 0) return undefined;
+    if (!anchor) return sections[0]!.id;
+    const wanted = slug(decodeURIComponent(anchor));
+    return sections.find((section) => slug(section.title) === wanted)?.id;
+  };
 
   return {
-    toc: () =>
-      all
-        // A file's text before its first heading is listed under the file's name, unless there is none.
-        .filter((section) => section.level <= 3 && (section.level > 0 || section.own.length > 0))
-        .map((section) => `${'  '.repeat(Math.max(0, section.level - 1))}- ${section.title} (${section.id})`)
-        .join('\n'),
+    toc() {
+      for (const depth of [3, 2, 1]) {
+        const lines = listed(depth);
+        if (lines.join('\n').length <= maxToc) return lines.join('\n') + (depth < 3 ? `\n(Deeper sections are not listed: find them with search_docs.)` : '');
+      }
+      // Too many files even for their top headings: as many as fit.
+      const lines = listed(1);
+      const kept: string[] = [];
+      for (const line of lines) {
+        if ([...kept, line].join('\n').length > maxToc) break;
+        kept.push(line);
+      }
+      return `${kept.join('\n')}\n(${lines.length - kept.length} more documents are not listed: find them with search_docs.)`;
+    },
 
     async search(query) {
       const wanted = [...new Set(terms(query))];
@@ -162,11 +196,55 @@ export function createDocs(files: readonly DocFile[], options: DocsOptions = {})
 
     async read(id) {
       const section = byId.get(id);
-      return section && `${section.trail.join(' › ')}\n\n${section.full}`;
+      if (!section) return undefined;
+      const from = id.slice(0, id.indexOf('#'));
+      // Links to other docs become IDs the model can read next; links elsewhere stay as they are.
+      const text = section.full.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (link, label: string, href: string) => {
+        const target = linkTarget(href, from);
+        return target ? `${label} [doc: ${target}]` : link;
+      });
+      return `${section.trail.join(' › ')}\n\n${text}`;
     },
 
     inline: () => (inlineMax > 0 && fullText.length <= inlineMax ? fullText : undefined),
   };
+}
+
+/** `a/b.md` relative to the file `from` (e.g. `datasource/new.md`), with `..` and `.` resolved. */
+function resolvePath(from: string, relative: string): string {
+  const parts = from.split('/').slice(0, -1);
+  for (const part of relative.split('/')) {
+    if (part === '..') parts.pop();
+    else if (part !== '.' && part !== '') parts.push(part);
+  }
+  return parts.join('/');
+}
+
+/** A heading as an anchor compares: lower case, spaces as hyphens, punctuation gone (as GitHub does it). */
+function slug(text: string): string {
+  return text.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+}
+
+/** Splits text into parts of at most `max` characters, at paragraph breaks where it can. */
+export function splitText(text: string, max: number): string[] {
+  const parts: string[] = [];
+  let current = '';
+  for (const paragraph of text.split(/(?<=\n\n)/)) {
+    for (let rest = paragraph; rest.length > 0; ) {
+      if (current.length + rest.length <= max) {
+        current += rest;
+        rest = '';
+      } else if (current) {
+        parts.push(current);
+        current = '';
+      } else {
+        parts.push(rest.slice(0, max));
+        rest = rest.slice(max);
+      }
+    }
+  }
+  if (current) parts.push(current);
+  return parts.length > 0 ? parts : [''];
 }
 
 /** About 200 characters of the section around the first place a search term appears. */
@@ -187,8 +265,14 @@ export function docsPrompt(docs: DocsProvider): string {
   return `The product has documentation, written by the app's makers; its table of contents is below. When a question touches how the product works (what a field means, rules and limits, how to do something, what an error means), look it up before answering instead of guessing: search_docs finds sections, read_doc reads one in full. Don't mention the tools to the user.\n<docs-toc>\n${docs.toc()}\n</docs-toc>`;
 }
 
+export interface DocsToolOptions {
+  /** Longest text read_doc returns at once; longer sections come in parts. Defaults to 6000. */
+  maxReadChars?: number;
+}
+
 /** `search_docs` and `read_doc`; none when the docs are in the system prompt already. */
-export function docsTools(docs: DocsProvider): Tool[] {
+export function docsTools(docs: DocsProvider, options: DocsToolOptions = {}): Tool[] {
+  const maxRead = options.maxReadChars ?? 6000;
   if (docs.inline?.()) return [];
   return [
     {
@@ -203,13 +287,21 @@ export function docsTools(docs: DocsProvider): Tool[] {
     },
     {
       name: 'read_doc',
-      description: 'Reads one section of the product documentation in full, with its subsections. Takes an ID from search_docs or the table of contents.',
-      parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+      description:
+        'Reads one section of the product documentation, with its subsections. Takes an ID from search_docs or the table of contents. A long section comes in parts: the text says so, and `part` reads the next. Links to other docs read "[doc: ID]".',
+      parameters: { type: 'object', properties: { id: { type: 'string' }, part: { type: 'integer', minimum: 1 } }, required: ['id'] },
       async execute(args) {
-        const id = String((args as { id: unknown }).id);
+        const { id: raw, part: wanted } = args as { id: unknown; part?: unknown };
+        const id = String(raw);
         const text = await docs.read(id);
         if (text === undefined) throw new Error(`no section with ID "${id}". Use an ID from search_docs or the table of contents.`);
-        return text;
+        const parts = splitText(text, maxRead);
+        // Models sometimes send the number as a string ("2"): read it as the number it spells.
+        const part = wanted === undefined ? 1 : Number(wanted);
+        if (!Number.isInteger(part) || part < 1 || part > parts.length) throw new Error(`"${id}" has ${parts.length} part(s); there is no part ${String(wanted)}.`);
+        if (parts.length === 1) return text;
+        const more = part < parts.length ? ` Call read_doc with part ${part + 1} for the next.` : '';
+        return `${parts[part - 1]!.trimEnd()}\n\n(Part ${part} of ${parts.length} of "${id}".${more})`;
       },
     },
   ];
