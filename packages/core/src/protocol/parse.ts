@@ -1,7 +1,8 @@
 /**
  * Checks the shape of a request body before it is used: every field that rendering and the model
  * adapters read, all the way down, so a malformed body gets a 400 instead of failing mid-stream.
- * First round: structure only, no size limits or trimming yet.
+ * Sizes are capped too (see `ProtocolLimits`): a request over a limit is turned away, never
+ * trimmed, because trimming would change history the model has already seen.
  *
  * All of it comes from the browser, `model` items too: the frontend stores them and sends them
  * back. Their shape is checked, their content can't be, so treat the whole conversation like the
@@ -10,6 +11,19 @@
 import { PROTOCOL_VERSION, type TurnRequest } from '@doccue/protocol';
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; errors: string[] };
+
+export interface ProtocolLimits {
+  /** Items in the conversation. */
+  maxItems: number;
+  /** Characters in one question. */
+  maxQuestionChars: number;
+  /** Nodes in one screen snapshot, at every depth. The bridge sends 300 at most by default. */
+  maxScreenNodes: number;
+  /** Actions in one upload. The bridge keeps 100 at most by default. */
+  maxActions: number;
+}
+
+export const DEFAULT_LIMITS: ProtocolLimits = { maxItems: 400, maxQuestionChars: 4000, maxScreenNodes: 3000, maxActions: 300 };
 
 type Errors = string[];
 type Obj = Record<string, unknown>;
@@ -133,14 +147,27 @@ function checkEntry(value: unknown, path: string, errors: Errors): void {
   list(value, 'effects', path, errors, effect, true);
 }
 
-function checkPerception(value: unknown, path: string, errors: Errors): void {
+/** Nodes in a (well-formed) tree, at every depth. */
+function countNodes(nodes: unknown): number {
+  if (!Array.isArray(nodes)) return 0;
+  return nodes.reduce<number>((sum, node) => sum + 1 + (isObject(node) ? countNodes(node.children) : 0), 0);
+}
+
+function checkPerception(value: unknown, path: string, errors: Errors, limits: ProtocolLimits): void {
   if (!object(value, path, errors)) return;
   field(value, 'at', 'number', path, errors);
+  if (Array.isArray(value.actions) && value.actions.length > limits.maxActions) {
+    return void errors.push(`${path}.actions: more than ${limits.maxActions} actions`);
+  }
   list(value, 'actions', path, errors, (entry, at) => checkEntry(entry, at, errors));
   const screen = value.screen;
   if (!object(screen, `${path}.screen`, errors)) return;
   checkPage(screen.page, `${path}.screen.page`, errors);
+  const before = errors.length;
   list(screen, 'nodes', `${path}.screen`, errors, (node, at) => checkNode(node, at, errors, 1));
+  if (errors.length === before && countNodes(screen.nodes) > limits.maxScreenNodes) {
+    errors.push(`${path}.screen.nodes: more than ${limits.maxScreenNodes} nodes`);
+  }
   field(screen, 'truncated', 'number', `${path}.screen`, errors, true);
 }
 
@@ -190,11 +217,12 @@ function checkMessage(value: unknown, path: string, errors: Errors): void {
 
 // --- the request --------------------------------------------------------------------------------
 
-function checkItem(item: unknown, path: string, errors: Errors): void {
+function checkItem(item: unknown, path: string, errors: Errors, limits: ProtocolLimits): void {
   if (!object(item, path, errors)) return;
   if (item.type === 'user') {
     field(item, 'text', 'string', path, errors);
-    checkPerception(item.perception, `${path}.perception`, errors);
+    if (typeof item.text === 'string' && item.text.length > limits.maxQuestionChars) errors.push(`${path}.text: longer than ${limits.maxQuestionChars} characters`);
+    checkPerception(item.perception, `${path}.perception`, errors, limits);
   } else if (item.type === 'model') {
     list(item, 'messages', path, errors, (message, at) => checkMessage(message, at, errors));
   } else if (item.type === 'guide_result') {
@@ -204,13 +232,14 @@ function checkItem(item: unknown, path: string, errors: Errors): void {
     oneOf(result, 'outcome', OUTCOMES, `${path}.result`, errors);
     field(result, 'completedSteps', 'number', `${path}.result`, errors);
     list(result, 'skippedSteps', `${path}.result`, errors, each('number', errors), true);
-    checkPerception(result.perception, `${path}.result.perception`, errors);
+    checkPerception(result.perception, `${path}.result.perception`, errors, limits);
   } else {
     errors.push(`${path}.type: expected "user", "model" or "guide_result"`);
   }
 }
 
-export function parseTurnRequest(raw: unknown): ParseResult<TurnRequest> {
+export function parseTurnRequest(raw: unknown, overrides: Partial<ProtocolLimits> = {}): ParseResult<TurnRequest> {
+  const limits = { ...DEFAULT_LIMITS, ...overrides };
   if (!isObject(raw)) return { ok: false, errors: ['body: expected an object'] };
   const errors: string[] = [];
   if (raw.v !== PROTOCOL_VERSION) errors.push(`v: expected ${PROTOCOL_VERSION}`);
@@ -222,7 +251,8 @@ export function parseTurnRequest(raw: unknown): ParseResult<TurnRequest> {
     errors.push('conversation: expected a non-empty array');
     return { ok: false, errors };
   }
-  items.forEach((item: unknown, index) => checkItem(item, `conversation[${index}]`, errors));
+  if (items.length > limits.maxItems) return { ok: false, errors: [`conversation: more than ${limits.maxItems} items`] };
+  items.forEach((item: unknown, index) => checkItem(item, `conversation[${index}]`, errors, limits));
   const last = items[items.length - 1] as { type?: unknown } | undefined;
   if (last?.type === 'model') errors.push('conversation: the last item must be a question or a guide result');
 

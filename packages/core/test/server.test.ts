@@ -194,6 +194,40 @@ describe('createHandler', () => {
   });
 });
 
+describe('limits', () => {
+  it('turns away bodies and requests over the limits, saying which, without calling the model', async () => {
+    const { logger, records } = createMemoryLog();
+    const handler = createHandler({
+      model: rejectedModel(),
+      basePath: '/doccue',
+      logger,
+      maxBodyBytes: 20_000,
+      limits: { maxItems: 3, maxQuestionChars: 20, maxScreenNodes: 5, maxActions: 1 },
+    });
+    const errorsOf = async (response: Response) => ((await response.json()) as { errors: string[] }).errors;
+    const empty: Perception = { at: 1, screen: { page: { path: '/' }, nodes: [] }, actions: [] };
+
+    const huge = await handler(post(ask('x'.repeat(30_000), empty)));
+    expect(huge.status).toBe(413);
+    expect(await errorsOf(huge)).toEqual(['body: larger than 20000 bytes']);
+
+    const long = await handler(post(ask('这个问题写得非常非常非常非常非常非常非常长', empty)));
+    expect(await errorsOf(long)).toEqual(['conversation[0].text: longer than 20 characters']);
+
+    const many = await handler(post({ ...ask('hi'), conversation: Array.from({ length: 5 }, () => ask('hi', empty).conversation[0]) }));
+    expect(await errorsOf(many)).toEqual(['conversation: more than 3 items']);
+
+    // wrongHost has 7 screen nodes and 2 actions.
+    const busy = await handler(post(ask('hi')));
+    expect(busy.status).toBe(400);
+    expect(await errorsOf(busy)).toEqual(['conversation[0].perception.actions: more than 1 actions']);
+    const crowded = await handler(post(ask('hi', { ...wrongHost, actions: [] })));
+    expect(await errorsOf(crowded)).toEqual(['conversation[0].perception.screen.nodes: more than 5 nodes']);
+
+    expect(records).toEqual([]);
+  });
+});
+
 describe('parseTurnRequest', () => {
   it('accepts a well-formed request and names what is wrong otherwise', () => {
     expect(parseTurnRequest(ask('hi'))).toEqual({ ok: true, value: ask('hi') });

@@ -141,7 +141,7 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
         </header>
         <div class="messages" aria-live="polite"></div>
         <form class="composer">
-          <textarea rows="1" placeholder="${escapeHtml(t.placeholder)}" aria-label="${escapeHtml(t.placeholder)}"></textarea>
+          <textarea rows="1" maxlength="${bridge.maxQuestionChars}" placeholder="${escapeHtml(t.placeholder)}" aria-label="${escapeHtml(t.placeholder)}"></textarea>
           <button type="button" class="stop" hidden>${escapeHtml(t.stop)}</button>
           <button type="submit" class="send" disabled>${escapeHtml(t.send)}</button>
         </form>
@@ -243,6 +243,10 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
       else if (event.reason === 'refusal') add({ role: 'note', text: t.refused });
       else if (event.reason === 'error' || event.reason === 'timeout' || event.reason === 'max_steps') add({ role: 'error', text: t.failed });
     },
+    error: (event) => {
+      settle();
+      add({ role: 'error', text: event.status === 400 || event.status === 413 ? t.failedConversation : t.failed });
+    },
     guide_start: () => {
       expanded = false;
       layout();
@@ -285,11 +289,8 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
     send.disabled = true;
     settle();
     add({ role: 'user', text: question });
-    void bridge.ask(question).catch((error: unknown) => {
-      settle();
-      add({ role: 'error', text: t.failed });
-      console.warn('DocCue:', error);
-    });
+    // Failures show through the bridge's `error` event; the details go to the console.
+    void bridge.ask(question).catch((error: unknown) => console.warn('DocCue:', error));
     layout();
   };
 

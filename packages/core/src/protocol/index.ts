@@ -1,1 +1,1 @@
-export { isLocale, parseTurnRequest, type ParseResult } from './parse.js';
+export { DEFAULT_LIMITS, isLocale, parseTurnRequest, type ParseResult, type ProtocolLimits } from './parse.js';

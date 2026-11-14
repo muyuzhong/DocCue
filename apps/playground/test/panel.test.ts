@@ -57,4 +57,23 @@ describe('the chat panel', () => {
     expect(await user.page.locator(`${PANEL} .message.error`).last().innerText()).toBe('出错了，请稍后再试。');
     expect(await user.page.locator(`${PANEL} .message.assistant`).count()).toBe(0);
   });
+
+  it('tells the user when the answer owed after a page load cannot come', async () => {
+    const user = await openPage(playground, '/dashboard');
+    await user.ask('数据平台能接入哪些数据库？只用文字回答，不要在页面上指。');
+    // The page goes away before the answer; on the new page the backend is down.
+    await user.page.route('**/doccue/turn', (route) => route.fulfill({ status: 502, body: 'bad gateway' }));
+    await user.reload();
+    await user.idle();
+    expect(await user.page.locator(`${PANEL} .message.error`).last().innerText()).toBe('出错了，请稍后再试。');
+    expect((await user.conversation()).map((item) => item.type)).toEqual(['user']);
+  });
+
+  it('asks for a new conversation when the backend turns this one away', async () => {
+    const user = await openPage(playground, '/dashboard');
+    await user.page.route('**/doccue/turn', (route) => route.fulfill({ status: 413, contentType: 'application/json', body: '{"errors":["body: larger than 2000000 bytes"]}' }));
+    await user.ask('你好');
+    await user.idle();
+    expect(await user.page.locator(`${PANEL} .message.error`).last().innerText()).toBe('这段对话没法继续了，请点右上角开始新对话。');
+  });
 });

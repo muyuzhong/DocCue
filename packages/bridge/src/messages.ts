@@ -28,6 +28,8 @@ export interface Messages {
   /** After an answer that hit the length limit. */
   cutOff: string;
   failed: string;
+  /** The backend turned the conversation away (too long, or no longer valid). */
+  failedConversation: string;
   refused: string;
 }
 
@@ -52,6 +54,7 @@ const MESSAGES: Record<string, Messages> = {
     stopped: 'Stopped',
     cutOff: '(The answer was cut short.)',
     failed: 'Something went wrong. Please try again.',
+    failedConversation: "This conversation can't go on. Please start a new one with the button at the top.",
     refused: "I can't help with that.",
   },
   zh: {
@@ -74,6 +77,7 @@ const MESSAGES: Record<string, Messages> = {
     stopped: '已停止',
     cutOff: '（回答太长，被截断了）',
     failed: '出错了，请稍后再试。',
+    failedConversation: '这段对话没法继续了，请点右上角开始新对话。',
     refused: '这个问题我没法回答。',
   },
 };

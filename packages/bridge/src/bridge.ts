@@ -57,6 +57,14 @@ export interface BridgeOptions {
   settle?: { quietMs?: number; maxMs?: number };
   /** Guides in a row for one question. Defaults to 20. */
   maxGuides?: number;
+  /**
+   * Size budget of the conversation sent with each request, in characters of JSON. When it is
+   * over, the oldest exchanges (a question with everything that followed it) are dropped; the
+   * current one always stays. Defaults to 150000.
+   */
+  maxConversationChars?: number;
+  /** Longest question accepted. Defaults to 4000, as the backend. */
+  maxQuestionChars?: number;
   /** Report failed fetch / XHR requests. Defaults to true. */
   captureNetwork?: boolean;
   /** Actions kept locally while waiting for a question. Defaults to 100. */
@@ -74,7 +82,9 @@ export type BridgeEvent =
   | { type: 'guide_start'; steps: GuideStep[] }
   | ({ type: 'guide_end' } & GuideEnd)
   | { type: 'state'; busy: boolean }
-  | { type: 'reset' };
+  | { type: 'reset' }
+  /** A question could not be answered: the request failed, was turned away, or the answer was cut off. */
+  | { type: 'error'; message: string; status?: number };
 
 type Listener<T extends BridgeEvent['type']> = (event: Extract<BridgeEvent, { type: T }>) => void;
 
@@ -97,6 +107,8 @@ export interface Bridge {
   guiding(): boolean;
   /** The words the bridge's UI uses, in the user's language. */
   readonly messages: Messages;
+  /** Longest question `ask` accepts. */
+  readonly maxQuestionChars: number;
   /**
    * Puts the built-in chat panel on the page: a round button in the corner that opens it. Loaded
    * on first use. Without it, build your own UI on `ask`, `stop`, `reset` and `on`.
@@ -136,6 +148,32 @@ function sessionStore(): Storage | undefined {
   }
 }
 
+/** A failure the bridge reports, with the HTTP status when the backend turned the request away. */
+export class BridgeError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'BridgeError';
+  }
+}
+
+/**
+ * The conversation within `maxChars` (as JSON): the oldest exchanges go first, each a question
+ * with everything up to the next one, so tool calls never lose their results. The latest
+ * exchange always stays. Returns `items` itself when it already fits.
+ */
+export function fitConversation(items: Item[], maxChars: number): Item[] {
+  if (JSON.stringify(items).length <= maxChars) return items;
+  const starts = items.flatMap((item, index) => (item.type === 'user' ? [index] : []));
+  for (const start of starts.slice(1)) {
+    const rest = items.slice(start);
+    if (JSON.stringify(rest).length <= maxChars || start === starts[starts.length - 1]) return rest;
+  }
+  return items;
+}
+
 export function createBridge(options: BridgeOptions): Bridge {
   const document = options.document ?? globalThis.document;
   const storage = sessionStore();
@@ -144,6 +182,7 @@ export function createBridge(options: BridgeOptions): Bridge {
   const timelineLimit = options.timelineLimit ?? 100;
   const locale = options.locale ?? (document.documentElement.lang || globalThis.navigator?.language);
   const messages = messagesFor(locale, options.messages);
+  const maxQuestionChars = options.maxQuestionChars ?? 4000;
   const settle = { quietMs: options.settle?.quietMs ?? 300, maxMs: options.settle?.maxMs ?? 4000 };
 
   const load = <T>(key: string, fallback: T): T => {
@@ -241,6 +280,11 @@ export function createBridge(options: BridgeOptions): Bridge {
 
   /** One request: sends the conversation, reports the answer, keeps what the model added. */
   async function send(signal: AbortSignal): Promise<GuideState | undefined> {
+    const fitted = fitConversation(items, options.maxConversationChars ?? 150_000);
+    if (fitted !== items) {
+      items = fitted;
+      save(CONVERSATION_KEY, items);
+    }
     const request: TurnRequest = {
       v: PROTOCOL_VERSION,
       conversation: items,
@@ -255,7 +299,7 @@ export function createBridge(options: BridgeOptions): Bridge {
     });
     if (!response.ok || !response.body) {
       const body = (await response.json().catch(() => ({}))) as { errors?: string[] };
-      throw new Error(`DocCue ${response.status}: ${(body.errors ?? []).join('; ') || response.statusText}`);
+      throw new BridgeError(`DocCue ${response.status}: ${(body.errors ?? []).join('; ') || response.statusText}`, response.status);
     }
     let started: GuideState | undefined;
     for await (const event of readAnswer(response.body)) {
@@ -344,10 +388,21 @@ export function createBridge(options: BridgeOptions): Bridge {
       }
     } catch (error) {
       // Stopped on purpose: nothing to report.
-      if (!controller.signal.aborted) throw error;
+      if (controller.signal.aborted) return;
+      fail(error);
+      throw error;
     } finally {
       if (running === controller) finished();
     }
+  }
+
+  /** Tells listeners a question could not be answered. */
+  function fail(error: unknown): void {
+    emit({
+      type: 'error',
+      message: error instanceof Error ? error.message : String(error),
+      ...(error instanceof BridgeError && error.status !== undefined ? { status: error.status } : {}),
+    });
   }
 
   /** The question is done with: answered, stopped or failed. */
@@ -373,6 +428,11 @@ export function createBridge(options: BridgeOptions): Bridge {
 
   const bridge: Bridge = {
     async ask(question) {
+      if (question.length > maxQuestionChars) {
+        const error = new BridgeError(`DocCue: the question is longer than ${maxQuestionChars} characters`);
+        fail(error);
+        throw error;
+      }
       // A new question replaces the answer in progress and interrupts the guide on screen.
       running?.abort();
       closeGuide('interrupted');
@@ -404,6 +464,7 @@ export function createBridge(options: BridgeOptions): Bridge {
     busy: () => running !== undefined,
     guiding: () => guide?.run !== undefined,
     messages,
+    maxQuestionChars,
     async mount(panelOptions) {
       const { mountPanel } = await import('./panel/panel.js');
       return mountPanel(bridge, { document, ...panelOptions });
