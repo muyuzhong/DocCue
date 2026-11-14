@@ -7,6 +7,8 @@
  */
 import type { GuideResult, GuideStep } from '@doccue/protocol';
 import type { Messages } from './messages.js';
+import { isIgnored, isVisible } from './dom.js';
+import { CANDIDATE_SELECTOR, isInteractive } from './naming.js';
 
 export type GuideEnd = Pick<GuideResult, 'outcome' | 'completedSteps' | 'skippedSteps'>;
 
@@ -50,6 +52,82 @@ button.next { border-color: #2563eb; background: #2563eb; color: #fff; }
 const GAP = 10;
 const PAD = 4;
 
+type Side = 'below' | 'right' | 'above' | 'left';
+/** In this order when nothing else decides. */
+const SIDES: Side[] = ['below', 'right', 'above', 'left'];
+const MARGIN = 8;
+
+interface Box {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(value, high));
+
+/** Where the bubble goes on one side of the target, and whether it fits on screen there. */
+function position(rect: DOMRect, size: { width: number; height: number }, side: Side, screen: { width: number; height: number }): { top: number; left: number; fits: boolean } {
+  const across = clamp(rect.left, MARGIN, screen.width - size.width - MARGIN);
+  const along = clamp(rect.top + rect.height / 2 - size.height / 2, MARGIN, screen.height - size.height - MARGIN);
+  switch (side) {
+    case 'below': {
+      const top = rect.bottom + GAP;
+      return { top, left: across, fits: top + size.height <= screen.height - MARGIN };
+    }
+    case 'above': {
+      const top = rect.top - GAP - size.height;
+      return { top, left: across, fits: top >= MARGIN };
+    }
+    case 'right': {
+      const left = rect.right + GAP;
+      return { top: along, left, fits: left + size.width <= screen.width - MARGIN };
+    }
+    case 'left': {
+      const left = rect.left - GAP - size.width;
+      return { top: along, left, fits: left >= MARGIN };
+    }
+  }
+}
+
+function overlap(a: Box, b: DOMRect): number {
+  const width = Math.min(a.left + a.width, b.right) - Math.max(a.left, b.left);
+  const height = Math.min(a.top + a.height, b.bottom) - Math.max(a.top, b.top);
+  return width > 0 && height > 0 ? width * height : 0;
+}
+
+/** Where DocCue's own chat panel is: the bubble must not go under it, or its buttons can't be clicked. */
+function panelArea(document: Document): DOMRect | undefined {
+  const panel = document.querySelector('[data-doccue-panel]');
+  const rect = panel?.getBoundingClientRect();
+  return rect && rect.width > 0 && rect.height > 0 ? rect : undefined;
+}
+
+/** The chat panel's area as a string, to notice when it opens, folds or closes. */
+function panelKey(document: Document): string {
+  const panel = panelArea(document);
+  return panel ? `${panel.left},${panel.top},${panel.width},${panel.height}` : '';
+}
+
+/** The side where the bubble fits on screen, stays clear of the chat panel, and covers the least of the page's other controls. */
+function chooseSide(target: Element, rect: DOMRect, size: { width: number; height: number }, screen: { width: number; height: number }): Side {
+  const document = target.ownerDocument;
+  const others = Array.from(document.querySelectorAll(CANDIDATE_SELECTOR))
+    .filter((element) => element !== target && !element.contains(target) && !target.contains(element) && isInteractive(element) && !isIgnored(element) && isVisible(element))
+    .map((element) => element.getBoundingClientRect());
+  const panel = panelArea(document);
+  let best: { side: Side; covered: number } | undefined;
+  for (const side of SIDES) {
+    const at = position(rect, size, side, screen);
+    if (!at.fits) continue;
+    const box = { top: at.top, left: at.left, width: size.width, height: size.height };
+    // Going under the panel is far worse than covering some of the page.
+    const covered = others.reduce((sum, other) => sum + overlap(box, other), 0) + (panel ? overlap(box, panel) * 1000 : 0);
+    if (!best || covered < best.covered) best = { side, covered };
+  }
+  return best?.side ?? 'below';
+}
+
 export function runGuide(options: GuideOptions): RunningGuide {
   const { document, steps, messages } = options;
   const view = document.defaultView!;
@@ -91,7 +169,8 @@ export function runGuide(options: GuideOptions): RunningGuide {
   const done = new Promise<GuideEnd | undefined>((r) => (resolve = r));
 
   // Between ticks, follow the element when the page scrolls or the window is resized.
-  const follow = () => {
+  const follow = (event?: Event) => {
+    if (event?.type === 'resize') side = undefined;
     if (current && !bubble.hidden) place(current);
   };
   view.addEventListener('scroll', follow, true);
@@ -108,6 +187,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
   };
 
   const advance = () => {
+    side = undefined;
     index++;
     shown = false;
     missingSince = undefined;
@@ -117,6 +197,11 @@ export function runGuide(options: GuideOptions): RunningGuide {
     else tick();
   };
 
+  /** Where the bubble goes for this step; chosen when the step shows, and again when the window or the chat panel changes. */
+  let side: Side | undefined;
+  /** The chat panel's area when `side` was chosen. */
+  let chosenWith = '';
+
   function place(target: Element): void {
     const rect = target.getBoundingClientRect();
     spot.style.left = `${rect.left - PAD}px`;
@@ -124,11 +209,17 @@ export function runGuide(options: GuideOptions): RunningGuide {
     spot.style.width = `${rect.width + PAD * 2}px`;
     spot.style.height = `${rect.height + PAD * 2}px`;
     const size = bubble.getBoundingClientRect();
-    const below = rect.bottom + GAP;
-    const top = below + size.height > view.innerHeight ? Math.max(8, rect.top - size.height - GAP) : below;
-    const left = Math.max(8, Math.min(rect.left, view.innerWidth - size.width - 8));
-    bubble.style.top = `${top}px`;
-    bubble.style.left = `${left}px`;
+    const screen = { width: view.innerWidth, height: view.innerHeight };
+    let spotAt = side && position(rect, size, side, screen);
+    // Scrolled so that it no longer fits, or the chat panel opened, folded or closed: choose again.
+    const panelNow = panelKey(document);
+    if (!spotAt?.fits || panelNow !== chosenWith) {
+      chosenWith = panelNow;
+      side = chooseSide(target, rect, size, screen);
+      spotAt = position(rect, size, side, screen);
+    }
+    bubble.style.top = `${spotAt.top}px`;
+    bubble.style.left = `${spotAt.left}px`;
   }
 
   /** Shows the current step if its element is there, and keeps the overlay on it. */

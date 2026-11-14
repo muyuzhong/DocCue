@@ -141,6 +141,26 @@ describe('findByLocator', () => {
     expect(findByLocator(document, { role: 'button', name: '保存' })).toBeUndefined();
   });
 
+  it('finds groups again too: forms, navigation, dialogs, lists', () => {
+    const markup = `
+      <nav aria-label="主菜单"><a href="/a">数据源</a></nav>
+      <form aria-label="连接信息"><input aria-label="主机地址" /></form>
+      <div role="dialog" aria-label="删除数据源"><button>确定</button></div>
+      <ul aria-label="最近打开"><li>报表 1</li></ul>
+      <table><tbody><tr><td>mysql-prod</td></tr></tbody></table>`;
+    document.body.innerHTML = markup;
+    const locators = ['nav', 'form', '[role="dialog"]', 'ul'].map((selector) => describeElement($(selector))!);
+    expect(locators).toEqual([
+      { role: 'navigation', name: '主菜单' },
+      { role: 'form', name: '连接信息' },
+      { role: 'dialog', name: '删除数据源' },
+      { role: 'list', name: '最近打开' },
+    ]);
+    expect(describeElement($('tr'))).toBeUndefined(); // a row has no name to find it by
+    document.body.innerHTML = markup; // re-rendered: new elements
+    expect(locators.map((locator) => findByLocator(document, locator))).toEqual([$('nav'), $('form'), $('[role="dialog"]'), $('ul')]);
+  });
+
   it('tells same-named controls apart by row, and prefers the host’s ID', () => {
     document.body.innerHTML = `
       <table><tbody>

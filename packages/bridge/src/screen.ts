@@ -7,7 +7,7 @@
 import type { Screen, ScreenNode } from '@doccue/protocol';
 import { clean, clip, isIgnored, isVisible, textOf } from './dom.js';
 import { NOTICE_SELECTOR } from './errors.js';
-import { accessibleName, dialogTitle, hasControlInside, isInteractive, roleOf } from './naming.js';
+import { accessibleName, groupOf, hasControlInside, isInteractive, roleOf } from './naming.js';
 
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'META', 'LINK', 'OPTION']);
 const TEXT_TAGS = new Set(['P', 'LI', 'TD', 'TH', 'SPAN', 'DIV', 'DD', 'DT', 'SMALL', 'STRONG', 'EM', 'B', 'CAPTION', 'FIGCAPTION', 'BLOCKQUOTE', 'PRE', 'CODE']);
@@ -75,22 +75,8 @@ function controlNode(element: Element): ScreenNode {
 }
 
 function groupNode(element: Element): ScreenNode | undefined {
-  const tag = element.tagName;
-  const role = element.getAttribute('role');
-  const label = clean(element.getAttribute('aria-label'));
-  const named = (groupRole: string, name: string): ScreenNode => ({ role: groupRole, ...(name ? { name } : {}) });
-  if (role === 'dialog' || role === 'alertdialog' || tag === 'DIALOG') return named('dialog', dialogTitle(element));
-  if (tag === 'FORM') return named('form', label);
-  if (tag === 'FIELDSET') {
-    const legend = element.querySelector('legend');
-    return named('group', legend ? textOf(legend) : label);
-  }
-  if (tag === 'NAV' || role === 'navigation') return named('navigation', label);
-  if (tag === 'TABLE' || role === 'table' || role === 'grid') return named('table', label);
-  if (tag === 'TR' || role === 'row') return named('row', '');
-  if (role === 'tablist') return named('tablist', label);
-  if (role === 'menu' || role === 'menubar') return named('menu', label);
-  return undefined;
+  const group = groupOf(element);
+  return group && { role: group.role, ...(group.name ? { name: group.name } : {}) };
 }
 
 /** Text directly inside the element (not inside its child elements). */

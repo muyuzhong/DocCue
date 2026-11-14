@@ -97,6 +97,26 @@ describe('guiding', () => {
     expect((await user.conversation()).at(-1)!.type).toBe('model');
   });
 
+  it('puts the bubble where it covers none of the page’s other controls', async () => {
+    const user = await openPage(playground, '/datasource/new');
+    await enterWrongHost(user.page);
+    await user.ask('为什么连不上？');
+    await user.bubble();
+    const covered = await user.page.evaluate(() => {
+      const bubble = document.querySelector('[data-doccue-guide]')!.shadowRoot!.querySelector('.bubble')!.getBoundingClientRect();
+      const spot = document.querySelector('[data-doccue-guide]')!.shadowRoot!.querySelector('.spot')!.getBoundingClientRect();
+      const inside = (rect: DOMRect, outer: DOMRect) => rect.left >= outer.left && rect.right <= outer.right && rect.top >= outer.top && rect.bottom <= outer.bottom;
+      return Array.from(document.querySelectorAll('main input, main select, main button, main a'))
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width > 0 && !inside(rect, spot)) // not the target itself
+        .filter(({ rect }) => rect.left < bubble.right && rect.right > bubble.left && rect.top < bubble.bottom && rect.bottom > bubble.top)
+        .map(({ element }) => element.id || element.textContent);
+    });
+    expect(covered).toEqual([]);
+    await user.page.locator('[data-doccue-guide] .exit').click();
+    await user.idle();
+  });
+
   it('ends the guide as interrupted when the user asks something else', async () => {
     const user = await openPage(playground, '/datasource/new');
     await enterWrongHost(user.page);

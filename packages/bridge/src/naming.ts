@@ -169,6 +169,28 @@ function headingNear(element: Element): string | undefined {
   return undefined;
 }
 
+/**
+ * The group an element forms, if any: a dialog, form, fieldset, navigation, table, row, tab list
+ * or menu, with its name. Used for the screen tree and to find a group again.
+ */
+export function groupOf(element: Element): { role: string; name: string } | undefined {
+  const tag = element.tagName;
+  const role = element.getAttribute('role');
+  const label = clean(element.getAttribute('aria-label'));
+  if (role === 'dialog' || role === 'alertdialog' || tag === 'DIALOG') return { role: 'dialog', name: dialogTitle(element) };
+  if (tag === 'FORM') return { role: 'form', name: label };
+  if (tag === 'FIELDSET') {
+    const legend = element.querySelector('legend');
+    return { role: 'group', name: legend ? textOf(legend) : label };
+  }
+  if (tag === 'NAV' || role === 'navigation') return { role: 'navigation', name: label };
+  if (tag === 'TABLE' || role === 'table' || role === 'grid') return { role: 'table', name: label };
+  if (tag === 'TR' || role === 'row') return { role: 'row', name: '' };
+  if (role === 'tablist') return { role: 'tablist', name: label };
+  if (role === 'menu' || role === 'menubar') return { role: 'menu', name: label };
+  return undefined;
+}
+
 export function dialogTitle(dialog: Element): string {
   const labelledBy = dialog.getAttribute('aria-labelledby');
   const byId = labelledBy ? dialog.ownerDocument.getElementById(labelledBy.split(/\s+/)[0] ?? '') : null;
