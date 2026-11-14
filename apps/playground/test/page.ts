@@ -31,12 +31,19 @@ declare global {
   }
 }
 
+/** The built-in chat panel (in a shadow root: Playwright's CSS selectors reach into it). */
+export const PANEL = '[data-doccue-panel]';
+
 export interface UserPage {
   page: Page;
   /** Every request the bridge sent to the backend, in order. */
   posts: TurnRequest[];
-  /** Types a question into the chat panel and waits until it has gone out. */
+  /** Opens the chat panel if needed, types a question and waits until it has gone out. */
   ask(question: string): Promise<void>;
+  /** Reloads the page and waits for the bridge and its panel. */
+  reload(): Promise<void>;
+  /** The answers shown in the chat panel. */
+  answers(): Promise<string[]>;
   /** Waits until the bridge has nothing in progress: no answer on its way, no guide on screen. */
   idle(): Promise<void>;
   busy(): Promise<boolean>;
@@ -56,8 +63,12 @@ export async function openPage(playground: Playground, path: string): Promise<Us
   page.on('request', (request) => {
     if (request.method() === 'POST' && request.url().endsWith('/doccue/turn')) posts.push(request.postDataJSON() as TurnRequest);
   });
+  const ready = async () => {
+    await page.waitForFunction(() => window.doccue !== undefined);
+    await page.locator(`${PANEL} .root`).waitFor({ state: 'attached' });
+  };
   await page.goto(`${playground.url}${path}`);
-  await page.waitForFunction(() => window.doccue !== undefined);
+  await ready();
 
   const bubble = page.locator('[data-doccue-guide] .bubble');
   const user: UserPage = {
@@ -65,11 +76,22 @@ export async function openPage(playground: Playground, path: string): Promise<Us
     posts,
     async ask(question) {
       const before = posts.length;
-      await page.locator('.assistant textarea').fill(question);
-      await page.locator('.assistant textarea').press('Enter');
+      // As a user would: the round button, or "Open" on the bar while a guide is on the page.
+      const expand = page.locator(`${PANEL} .expand`);
+      const launcher = page.locator(`${PANEL} .launcher`);
+      if (await expand.isVisible()) await expand.click();
+      else if (await launcher.isVisible()) await launcher.click();
+      await page.locator(`${PANEL} textarea`).fill(question);
+      await page.locator(`${PANEL} textarea`).press('Enter');
       await page.waitForFunction((count) => window.doccue.busy() || count, posts.length > before);
       for (let waited = 0; posts.length === before && waited < 10_000; waited += 50) await page.waitForTimeout(50);
     },
+    async reload() {
+      await page.reload();
+      await ready();
+    },
+    // Text content, so answers in a folded (hidden) panel count too.
+    answers: () => page.locator(`${PANEL} .message.assistant`).allTextContents(),
     idle: () => page.waitForFunction(() => !window.doccue.busy(), null, { timeout: 180_000, polling: 100 }).then(() => undefined),
     busy: () => page.evaluate(() => window.doccue.busy()),
     conversation: () => page.evaluate(() => window.doccue.conversation()),

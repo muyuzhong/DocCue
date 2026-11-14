@@ -33,9 +33,10 @@ export interface RunningGuide {
   stop(): Omit<GuideEnd, 'outcome'>;
 }
 
+// One below the chat panel, so its bar stays clear of the dimming.
 const STYLE = `
 :host { all: initial; }
-.layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483647; font: 14px/1.5 system-ui, sans-serif; }
+.layer { position: fixed; inset: 0; pointer-events: none; z-index: 2147483646; font: 14px/1.5 system-ui, sans-serif; }
 .spot { position: fixed; border-radius: 6px; box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.45), 0 0 0 2px #4f8cff; transition: all 0.15s ease-out; }
 .bubble { position: fixed; pointer-events: auto; box-sizing: border-box; width: max-content; max-width: 320px; padding: 12px 14px; border-radius: 10px; background: #fff; color: #111827; box-shadow: 0 8px 28px rgba(15, 23, 42, 0.28); }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }

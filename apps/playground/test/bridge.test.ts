@@ -3,7 +3,7 @@
  * runs, and what happens when the user interrupts, exits, stops or reloads the page.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { enterWrongHost, guideResults, openPage, openPlayground, userItems, type Playground } from './page.js';
+import { PANEL, enterWrongHost, guideResults, openPage, openPlayground, userItems, type Playground } from './page.js';
 
 let playground: Playground;
 beforeAll(async () => {
@@ -47,12 +47,12 @@ describe('asking', () => {
     await user.page.evaluate(() => {
       const off = window.doccue.on('text', () => {
         off();
-        document.querySelector<HTMLButtonElement>('.assistant .stop')!.click();
+        document.querySelector('[data-doccue-panel]')!.shadowRoot!.querySelector<HTMLButtonElement>('.stop')!.click();
       });
     });
     await user.ask(`逐个字段详细说明新建数据源页面怎么填，每个字段写一段。${TEXT_ONLY}`);
     await user.idle();
-    expect(await user.page.locator('.message.assistant .meta').last().innerText()).toBe('已停止');
+    expect(await user.page.locator(`${PANEL} .message.note`).last().innerText()).toBe('已停止');
     expect((await user.conversation()).map((item) => item.type)).toEqual(['user']);
   });
 
@@ -63,11 +63,10 @@ describe('asking', () => {
     await user.page.getByRole('link', { name: '数据源', exact: true }).click();
     await user.page.waitForTimeout(1200);
 
-    await user.page.reload();
-    await user.page.waitForFunction(() => window.doccue !== undefined);
+    await user.reload();
     expect((await user.conversation()).map((item) => item.type)).toEqual(['user', 'model']);
     expect(await user.page.evaluate(() => window.doccue.recorded().map((entry) => entry.action?.target?.name))).toEqual(['数据源']);
-    expect(await user.page.locator('.message.user').count()).toBe(1); // the chat is drawn again
+    expect(await user.page.locator(`${PANEL} .message.user`).count()).toBe(1); // the chat is drawn again
 
     await user.page.getByRole('button', { name: '新对话' }).click();
     expect(await user.conversation()).toEqual([]);
@@ -128,8 +127,7 @@ describe('guiding', () => {
     await user.ask('为什么连不上？');
     const before = await user.bubble();
 
-    await user.page.reload();
-    await user.page.waitForFunction(() => window.doccue !== undefined);
+    await user.reload();
     // The form came back empty, but the step points at the same field again.
     expect(await user.bubble()).toEqual(before);
     expect(await user.highlighted()).toBe('input#host');
@@ -146,8 +144,7 @@ describe('guiding', () => {
   it('asks again after a reload when the answer had not come yet', async () => {
     const user = await openPage(playground, '/dashboard');
     await user.ask(`数据平台能接入哪些数据库？${TEXT_ONLY}`);
-    await user.page.reload();
-    await user.page.waitForFunction(() => window.doccue !== undefined);
+    await user.reload();
     await user.finishGuides();
     expect(user.posts.length).toBeGreaterThanOrEqual(2);
     expect(user.posts[1]!.conversation).toEqual(user.posts[0]!.conversation);

@@ -22,7 +22,7 @@ describe('answering from the docs', () => {
     await user.finishGuides();
     const conversation = await user.conversation();
     expect(toolsCalled(conversation).some((name) => name === 'search_docs' || name === 'read_doc')).toBe(true);
-    const answer = await user.page.locator('.message.assistant').last().innerText();
+    const answer = (await user.answers()).at(-1) ?? '';
     expect(answer).toMatch(/无法恢复|不能恢复|不可恢复/);
   });
 
@@ -35,7 +35,7 @@ describe('answering from the docs', () => {
     await user.page.waitForTimeout(1200);
     await user.ask('连接失败是什么原因？只用文字回答，不要在页面上指。');
     await user.finishGuides();
-    const answer = await user.page.locator('.message.assistant').last().innerText();
+    const answer = (await user.answers()).at(-1) ?? '';
     expect(answer).toContain('5432');
   });
 });

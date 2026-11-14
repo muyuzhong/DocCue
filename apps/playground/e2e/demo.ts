@@ -12,6 +12,7 @@ import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright-core';
 import { start } from '../server.js';
+import { guideOrAnswer, isBusy, openPanel } from './panel.js';
 
 const shots = process.env.E2E_SCREENSHOTS ?? fileURLToPath(new URL('../.e2e/', import.meta.url));
 mkdirSync(shots, { recursive: true });
@@ -23,21 +24,21 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.on('pageerror', (error) => console.log(`[页面报错] ${error.message}`));
 
 const guideBubble = page.locator('[data-doccue-guide] .bubble');
-const busy = page.locator('.assistant .stop');
 
 /** Types a question and waits until a guide is on screen or the answer has ended. */
 async function ask(page: Page, question: string): Promise<void> {
   console.log(`\n—— 提问：${question}`);
-  console.log(`本地已记录、随这次提问发送的操作：\n${await page.locator('.recorded').innerText()}`);
-  await page.locator('.assistant textarea').fill(question);
-  await page.locator('.assistant textarea').press('Enter');
-  await guideBubble.or(page.locator('.assistant .stop[hidden]')).first().waitFor({ state: 'attached', timeout: 240_000 });
+  console.log(`本地已记录、随这次提问发送的操作：\n${await page.locator('.debug .recorded').innerText()}`);
+  await openPanel(page);
+  await page.locator('[data-doccue-panel] textarea').fill(question);
+  await page.locator('[data-doccue-panel] textarea').press('Enter');
+  await guideOrAnswer(page);
 }
 
 /** Waits for the exchange to end; steps of a guide the script has no action for are walked through with Next. */
 async function finish(page: Page): Promise<void> {
   const deadline = Date.now() + 240_000;
-  while (await busy.isVisible()) {
+  while (await isBusy(page)) {
     if (Date.now() > deadline) throw new Error('the answer did not end in time');
     if (await guideBubble.isVisible()) {
       console.log(`  （脚本点了「下一步」：${(await guideBubble.locator('.text').innerText()).trim()}）`);
@@ -50,7 +51,7 @@ async function finish(page: Page): Promise<void> {
 /** Prints what was said since the last call. */
 let printed = 0;
 async function printMessages(page: Page): Promise<void> {
-  const all = await page.locator('.messages .message').allInnerTexts();
+  const all = await page.locator('[data-doccue-panel] .message').allInnerTexts();
   for (const text of all.slice(printed)) console.log(`  · ${text.replace(/\n+/g, ' / ')}`);
   printed = all.length;
 }
@@ -65,7 +66,7 @@ try {
 
   // 1. A wrong value: the agent should say why and point at the field.
   await ask(page, '为什么连不上？');
-  console.log(`\n模型看到的现场信息：\n${await page.locator('.context').innerText()}\n`);
+  console.log(`\n模型看到的现场信息：\n${await page.locator('.debug .context').innerText()}\n`);
   await printMessages(page);
   if (await guideBubble.isVisible()) {
     console.log(`\n页面上的气泡：${(await guideBubble.locator('.text').innerText()).trim()}`);
@@ -82,7 +83,7 @@ try {
   }
   await finish(page);
   await printMessages(page);
-  console.log(`\n模型最后看到的：\n${await page.locator('.context').innerText()}`);
+  console.log(`\n模型最后看到的：\n${await page.locator('.debug .context').innerText()}`);
   await page.screenshot({ path: `${shots}/2-after-guide.png` });
 
   // 2. A question that needs no pointing: a plain answer, no guide.

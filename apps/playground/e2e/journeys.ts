@@ -11,6 +11,7 @@
  */
 import { chromium, type ElementHandle, type Page } from 'playwright-core';
 import { start } from '../server.js';
+import { guideOrAnswer, isBusy, openPanel } from './panel.js';
 
 interface Journey {
   name: string;
@@ -83,18 +84,18 @@ async function run(journey: Journey): Promise<boolean> {
   const browser = await chromium.launch({ channel: 'chrome', headless: true });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const bubble = page.locator('[data-doccue-guide] .bubble');
-  const busy = page.locator('.assistant .stop');
-  try {
+    try {
     await page.goto(`${server.url}${journey.start}`);
-    await page.locator('.assistant textarea').fill(journey.question);
-    await page.locator('.assistant textarea').press('Enter');
+    await openPanel(page);
+  await page.locator('[data-doccue-panel] textarea').fill(journey.question);
+    await page.locator('[data-doccue-panel] textarea').press('Enter');
 
     const deadline = Date.now() + 240_000;
     let actions = 0;
     let last = '';
     let repeats = 0;
-    await bubble.or(page.locator('.assistant .stop[hidden]')).first().waitFor({ state: 'attached', timeout: 120_000 });
-    while (await busy.isVisible()) {
+    await guideOrAnswer(page);
+    while (await isBusy(page)) {
       if (Date.now() > deadline) throw new Error('did not finish in time');
       if (!(await bubble.isVisible())) {
         await page.waitForTimeout(300);
@@ -105,6 +106,11 @@ async function run(journey: Journey): Promise<boolean> {
       // The same step again after acting on it: the action did not count (e.g. a disabled button). Skip it.
       repeats = text === last ? repeats + 1 : 0;
       last = text;
+      // A disabled control may only be waiting for something (a connection test): wait like a person would.
+      if (target?.disabled) {
+        for (let waited = 0; waited < 5000 && (await target.handle.evaluate((node) => (node as HTMLButtonElement).disabled)); waited += 250) await page.waitForTimeout(250);
+        target.disabled = await target.handle.evaluate((node) => (node as HTMLButtonElement).disabled);
+      }
       const value = target ? journey.values[target.label] : undefined;
       if (!target || target.disabled || repeats >= 2 || (target.tag === 'select' && value === undefined)) {
         console.log(`    下一步  ${text}`);
@@ -128,7 +134,7 @@ async function run(journey: Journey): Promise<boolean> {
         await page.waitForTimeout(500);
       }
     }
-    const said = await page.locator('.messages .message.assistant').allInnerTexts();
+    const said = await page.locator('[data-doccue-panel] .message.assistant').allInnerTexts();
     console.log(`    最后的回答：${(said.at(-1) ?? '').replace(/\s+/g, ' ').slice(0, 120)}`);
     const list = (await (await fetch(`${server.url}/api/datasources`)).json()) as Parameters<Journey['goal']>[0];
     return journey.goal(list);

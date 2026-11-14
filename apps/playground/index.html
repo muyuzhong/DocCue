@@ -14,26 +14,15 @@
         <a href="/dashboard" data-link>仪表盘</a>
       </nav>
       <main id="main"></main>
-      <aside class="assistant" data-cue-ignore>
+      <aside class="debug" data-cue-ignore>
         <header>
-          <strong>应用内助手</strong>
-          <button type="button" class="reset">新对话</button>
+          <strong>agent 看到了什么</strong>
+          <span>调试用，接入时没有这一栏</span>
         </header>
-        <div class="messages" aria-live="off"></div>
-        <form class="composer">
-          <textarea rows="2" placeholder="遇到问题就问我，比如：为什么连不上？怎么新建数据源？"></textarea>
-          <div class="composer-actions">
-            <button type="button" class="stop" hidden>停止</button>
-            <button type="submit" class="send">发送</button>
-          </div>
-        </form>
-        <details class="debug" open>
-          <summary>agent 看到了什么</summary>
-          <h4>本地已记录、等提问时发送的操作</h4>
-          <pre class="recorded">（还没有操作）</pre>
-          <h4>模型最近一次看到的现场信息</h4>
-          <pre class="context">（还没有提问）</pre>
-        </details>
+        <h4>本地已记录、等提问时发送的操作</h4>
+        <pre class="recorded">（还没有操作）</pre>
+        <h4>模型最近一次看到的现场信息</h4>
+        <pre class="context">（还没有提问）</pre>
       </aside>
     </div>
     <div class="toasts"></div>

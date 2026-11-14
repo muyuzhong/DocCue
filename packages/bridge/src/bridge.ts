@@ -23,7 +23,8 @@ import { isVisible } from './dom.js';
 import { DEFAULT_ERROR_SELECTORS } from './errors.js';
 import { runGuide, type GuideEnd, type RunningGuide } from './guide.js';
 import { describeElement, findByLocator } from './locate.js';
-import { messagesFor } from './messages.js';
+import { messagesFor, type Messages } from './messages.js';
+import type { Panel, PanelOptions } from './panel/panel.js';
 import { createRecorder } from './recorder.js';
 import { buildScreen } from './screen.js';
 import { whenSettled } from './settle.js';
@@ -34,6 +35,8 @@ export interface BridgeOptions {
   endpoint: string;
   /** The user's language, e.g. `zh-CN`. Defaults to the page's `lang`, then the browser's. */
   locale?: string;
+  /** Your own wording for the bridge's UI (the guide's bubble and the chat panel), on top of the language's. */
+  messages?: Partial<Messages>;
   /**
    * What the host app knows about the user, e.g. role or plan. Anyone can change what the browser
    * sends: for anything that must hold, set it on the backend instead (`createHandler`'s `user`).
@@ -62,10 +65,16 @@ export interface BridgeOptions {
 }
 
 /**
- * What the bridge reports: the answer's stream, the end of a guide it ran, and `state` whenever
- * it starts or stops working on a question (an answer on its way or a guide on screen).
+ * What the bridge reports: the answer's stream; a guide appearing on the page (also one carried
+ * on after a page load) and its end; `state` whenever it starts or stops working on a question
+ * (an answer on its way or a guide on screen); and `reset` when the conversation was cleared.
  */
-export type BridgeEvent = StreamEvent | ({ type: 'guide_end' } & GuideEnd) | { type: 'state'; busy: boolean };
+export type BridgeEvent =
+  | StreamEvent
+  | { type: 'guide_start'; steps: GuideStep[] }
+  | ({ type: 'guide_end' } & GuideEnd)
+  | { type: 'state'; busy: boolean }
+  | { type: 'reset' };
 
 type Listener<T extends BridgeEvent['type']> = (event: Extract<BridgeEvent, { type: T }>) => void;
 
@@ -84,6 +93,15 @@ export interface Bridge {
   on<T extends BridgeEvent['type']>(type: T, listener: Listener<T>): () => void;
   /** Whether an answer is on its way or a guide is on screen. */
   busy(): boolean;
+  /** Whether a guide is on screen. */
+  guiding(): boolean;
+  /** The words the bridge's UI uses, in the user's language. */
+  readonly messages: Messages;
+  /**
+   * Puts the built-in chat panel on the page: a round button in the corner that opens it. Loaded
+   * on first use. Without it, build your own UI on `ask`, `stop`, `reset` and `on`.
+   */
+  mount(options?: PanelOptions): Promise<Panel>;
   /** Actions recorded locally and not sent yet. */
   recorded(): TimelineEntry[];
   /** What the next question would send. */
@@ -125,6 +143,7 @@ export function createBridge(options: BridgeOptions): Bridge {
   const errorSelectors = [...DEFAULT_ERROR_SELECTORS, ...(options.errorSelectors ?? [])];
   const timelineLimit = options.timelineLimit ?? 100;
   const locale = options.locale ?? (document.documentElement.lang || globalThis.navigator?.language);
+  const messages = messagesFor(locale, options.messages);
   const settle = { quietMs: options.settle?.quietMs ?? 300, maxMs: options.settle?.maxMs ?? 4000 };
 
   const load = <T>(key: string, fallback: T): T => {
@@ -271,7 +290,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       const run = runGuide({
         document,
         steps: state.steps,
-        messages: messagesFor(locale),
+        messages,
         waitMs: options.targetWaitMs ?? 3000,
         start: progressOf(state),
         onProgress: (progress) => {
@@ -289,6 +308,7 @@ export function createBridge(options: BridgeOptions): Bridge {
         },
       });
       shown.run = run;
+      emit({ type: 'guide_start', steps: state.steps });
       end = await run.done;
     }
     // Stopped from outside (a new question, stop, reset): whoever did it wrote the result.
@@ -351,7 +371,7 @@ export function createBridge(options: BridgeOptions): Bridge {
     save(ACTIVE_KEY, undefined);
   }
 
-  return {
+  const bridge: Bridge = {
     async ask(question) {
       // A new question replaces the answer in progress and interrupts the guide on screen.
       running?.abort();
@@ -373,6 +393,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       save(CONVERSATION_KEY, items);
       save(GUIDE_KEY, undefined);
       if (running) finished();
+      emit({ type: 'reset' });
     },
     on(type, listener) {
       const set = listeners.get(type) ?? new Set();
@@ -381,6 +402,12 @@ export function createBridge(options: BridgeOptions): Bridge {
       return () => set.delete(listener as (event: BridgeEvent) => void);
     },
     busy: () => running !== undefined,
+    guiding: () => guide?.run !== undefined,
+    messages,
+    async mount(panelOptions) {
+      const { mountPanel } = await import('./panel/panel.js');
+      return mountPanel(bridge, { document, ...panelOptions });
+    },
     recorded: () => [...unsent],
     perceive: () => ({ at: Date.now(), screen: snapshot().screen, actions: [...unsent] }),
     conversation: () => [...items],
@@ -393,4 +420,5 @@ export function createBridge(options: BridgeOptions): Bridge {
       guide?.run?.stop();
     },
   };
+  return bridge;
 }

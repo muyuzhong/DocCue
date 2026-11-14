@@ -4,6 +4,8 @@ export { DEFAULT_ERROR_SELECTORS, collectErrors, collectNotices, type PageError 
 export { runGuide, type GuideEnd, type GuideOptions, type RunningGuide } from './guide.js';
 export { describeElement, findByLocator } from './locate.js';
 export { messagesFor, type Messages } from './messages.js';
+export type { Panel, PanelOptions } from './panel/panel.js';
+export { renderMarkdown } from './panel/markdown.js';
 export { accessibleName, findControl, isInteractive, locatorOf, roleOf } from './naming.js';
 export { createRecorder, type Recorder, type RecorderOptions } from './recorder.js';
 export { buildScreen, type ScreenOptions, type Snapshot } from './screen.js';
