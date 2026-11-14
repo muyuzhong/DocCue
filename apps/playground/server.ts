@@ -46,6 +46,18 @@ const SEED: Datasource[] = [
 ];
 /** The mock data; every `start()` begins with the seed again. */
 const datasources: Datasource[] = [];
+const settings = { email: 'admin@example.com' };
+
+/** The settings form posts here, as a whole page: save, then redirect like a classic multi-page app. */
+async function saveSettings(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  let raw = '';
+  for await (const chunk of req) raw += chunk;
+  const email = (new URLSearchParams(raw).get('email') ?? '').trim();
+  const valid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email);
+  if (valid) settings.email = email;
+  res.writeHead(303, { location: valid ? '/settings?saved=1' : '/settings/notifications?error=1' });
+  res.end();
+}
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   let raw = '';
@@ -65,6 +77,7 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 async function api(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const { pathname } = new URL(req.url ?? '/', 'http://localhost');
   if (pathname === '/api/datasources' && req.method === 'GET') return send(res, 200, datasources);
+  if (pathname === '/api/settings' && req.method === 'GET') return send(res, 200, settings);
   if (pathname === '/api/datasources' && req.method === 'POST') {
     const body = await readJson(req);
     const item: Datasource = {
@@ -99,6 +112,7 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
   if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
   const model = createModelFromEnv(process.env);
   datasources.splice(0, datasources.length, ...SEED.map((item) => ({ ...item })));
+  settings.email = 'admin@example.com';
 
   const logDir = new URL('.logs/', import.meta.url);
   mkdirSync(logDir, { recursive: true });
@@ -137,6 +151,7 @@ export async function start(port = Number(process.env.PORT ?? 5173)): Promise<{ 
     const url = req.url ?? '/';
     if (url.startsWith('/doccue/')) void doccue(req, res);
     else if (url === '/debug/render') void debug(req, res).catch((error: unknown) => send(res, 500, { message: String(error) }));
+    else if (url === '/settings/notifications' && req.method === 'POST') void saveSettings(req, res).catch((error: unknown) => send(res, 500, { message: String(error) }));
     else if (url.startsWith('/api/')) void api(req, res).catch((error: unknown) => send(res, 500, { message: String(error) }));
     else vite.middlewares(req, res);
   });

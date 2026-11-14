@@ -135,6 +135,8 @@ interface GuideState {
 
 const CONVERSATION_KEY = 'doccue:conversation';
 const UNSENT_KEY = 'doccue:unsent';
+/** The page this tab was on when it was left, to notice a full page load to another one. */
+const LEFT_KEY = 'doccue:left';
 /** The guide on screen (a `GuideState`), until its result is in the conversation. */
 const GUIDE_KEY = 'doccue:guide';
 /** Set while a question is being worked on, so a new page knows an answer is still owed. */
@@ -211,6 +213,13 @@ export function createBridge(options: BridgeOptions): Bridge {
   let guide: { state: GuideState; run?: RunningGuide } | undefined = interrupted ? { state: interrupted } : undefined;
   /** After `destroy`, nothing more is written: what is in storage is for the next page. */
   let destroyed = false;
+  /**
+   * Set while the page is being left. The browser cuts off requests on the way out (in Chrome even
+   * before `pagehide`); that must not read as a failure, or the next page would not know an answer
+   * is still owed.
+   */
+  let leaving = false;
+  let stay: ReturnType<typeof setTimeout> | undefined;
 
   let running: AbortController | undefined;
   /** The elements behind the numbers of the screen sent last. */
@@ -235,6 +244,42 @@ export function createBridge(options: BridgeOptions): Bridge {
     },
     onAction: (element) => guide?.run?.action(element),
   });
+
+  // A full page load to another page (a plain link, a form that posts): note it the way the
+  // recorder notes a single-page app's navigation, as what the last action led to.
+  const here = () => `${document.location?.pathname ?? ''}${document.location?.hash ?? ''}`;
+  const left = load<string | undefined>(LEFT_KEY, undefined);
+  if (left !== undefined && left !== here()) {
+    const arrived = { type: 'navigate' as const, page: { path: here() } };
+    const last = unsent[unsent.length - 1];
+    if (last?.action && Date.now() - last.at < 10_000 && !last.effects?.some((effect) => effect.type === 'navigate')) {
+      unsent = [...unsent.slice(0, -1), { ...last, effects: [...(last.effects ?? []), arrived] }];
+    } else {
+      unsent = [...unsent, { at: Date.now(), effects: [arrived] }].slice(-timelineLimit);
+    }
+    save(UNSENT_KEY, unsent);
+  }
+  save(LEFT_KEY, undefined);
+  const onLeave = () => {
+    save(LEFT_KEY, here());
+    leaving = true;
+  };
+  // Leaving starts here, before any request is cut off. If the page stays after all (a prompt
+  // said "stay"), timers still run and this wears off.
+  const onBeforeUnload = () => {
+    leaving = true;
+    clearTimeout(stay);
+    stay = setTimeout(() => (leaving = false), 3000);
+  };
+  // Back from the back/forward cache: this page goes on after all.
+  const onReturn = (event: PageTransitionEvent) => {
+    if (!event.persisted) return;
+    leaving = false;
+    save(LEFT_KEY, undefined);
+  };
+  document.defaultView?.addEventListener('beforeunload', onBeforeUnload);
+  document.defaultView?.addEventListener('pagehide', onLeave);
+  document.defaultView?.addEventListener('pageshow', onReturn);
 
   const emit = (event: BridgeEvent) => {
     for (const listener of [...(listeners.get(event.type) ?? [])]) listener(event);
@@ -388,7 +433,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       }
     } catch (error) {
       // Stopped on purpose: nothing to report.
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || leaving) return;
       fail(error);
       throw error;
     } finally {
@@ -408,7 +453,8 @@ export function createBridge(options: BridgeOptions): Bridge {
   /** The question is done with: answered, stopped or failed. */
   function finished(): void {
     running = undefined;
-    save(ACTIVE_KEY, undefined);
+    // On the way out, the answer is still owed: the next page asks again.
+    if (!leaving) save(ACTIVE_KEY, undefined);
     emit({ type: 'state', busy: false });
   }
 
@@ -474,6 +520,10 @@ export function createBridge(options: BridgeOptions): Bridge {
     conversation: () => [...items],
     destroy() {
       // Like the page going away: what is in storage stays for the next page.
+      document.defaultView?.removeEventListener('beforeunload', onBeforeUnload);
+      document.defaultView?.removeEventListener('pagehide', onLeave);
+      document.defaultView?.removeEventListener('pageshow', onReturn);
+      clearTimeout(stay);
       recorder.stop();
       destroyed = true;
       listeners.clear();

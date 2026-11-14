@@ -18,9 +18,9 @@ declare global {
   }
 }
 
-/** Whether an answer is on its way or a guide is on the page. */
+/** Whether an answer is on its way or a guide is on the page. While a new page loads (no bridge yet), it is. */
 export function isBusy(page: Page): Promise<boolean> {
-  return page.evaluate(() => window.doccue.busy());
+  return page.evaluate(() => window.doccue?.busy() ?? true).catch(() => true);
 }
 
 /** Waits until a guide is on the page or the answer is over. */

@@ -168,11 +168,42 @@ function dashboardPage(): void {
     </div>`;
 }
 
+// --- settings: whole pages, plain links and a form that posts -----------------------------------
+
+async function settingsPage(): Promise<void> {
+  document.title = '设置';
+  const { email } = (await (await fetch('/api/settings')).json()) as { email: string };
+  const saved = new URLSearchParams(location.search).has('saved');
+  main().innerHTML = `
+    <h1>设置</h1>
+    ${saved ? '<p class="notice" role="status">已保存</p>' : ''}
+    <section class="card" aria-labelledby="notify-title">
+      <h2 id="notify-title">通知</h2>
+      <p>同步失败时，告警邮件发到 <strong>${escapeHtml(email)}</strong>。</p>
+      <a class="button" href="/settings/notifications">修改通知邮箱</a>
+    </section>`;
+}
+
+function notificationsPage(): void {
+  document.title = '修改通知邮箱';
+  const error = new URLSearchParams(location.search).has('error');
+  // A real form: the browser posts it to the server, which redirects back to the settings page.
+  main().innerHTML = `
+    <h1>修改通知邮箱</h1>
+    <form class="card" method="post" action="/settings/notifications" aria-label="通知邮箱">
+      <div class="field"><label for="email">通知邮箱</label><input id="email" name="email" inputmode="email" placeholder="例如 ops@example.com"${error ? ' aria-invalid="true" aria-describedby="email-error"' : ''} />
+        ${error ? '<p class="field-error" id="email-error" role="alert">邮箱格式不对</p>' : ''}</div>
+      <div class="actions"><a class="button" href="/settings">取消</a><button type="submit" class="primary">保存</button></div>
+    </form>`;
+}
+
 export async function render(): Promise<void> {
   const path = location.pathname;
   document.querySelectorAll('.sidebar a').forEach((link) => link.toggleAttribute('aria-current', link.getAttribute('href') === path));
   if (path === '/datasource/new') newPage();
   else if (path === '/dashboard') dashboardPage();
+  else if (path === '/settings') await settingsPage();
+  else if (path === '/settings/notifications') notificationsPage();
   else await listPage();
 }
 

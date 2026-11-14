@@ -42,6 +42,8 @@ export interface UserPage {
   ask(question: string): Promise<void>;
   /** Reloads the page and waits for the bridge and its panel. */
   reload(): Promise<void>;
+  /** Waits for the bridge and its panel, e.g. after a whole page loaded. */
+  ready(): Promise<void>;
   /** The answers shown in the chat panel. */
   answers(): Promise<string[]>;
   /** Waits until the bridge has nothing in progress: no answer on its way, no guide on screen. */
@@ -90,6 +92,7 @@ export async function openPage(playground: Playground, path: string): Promise<Us
       await page.reload();
       await ready();
     },
+    ready,
     // Text content, so answers in a folded (hidden) panel count too.
     answers: () => page.locator(`${PANEL} .message.assistant`).allTextContents(),
     idle: () => page.waitForFunction(() => !window.doccue.busy(), null, { timeout: 180_000, polling: 100 }).then(() => undefined),

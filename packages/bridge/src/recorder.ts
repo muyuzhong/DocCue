@@ -207,6 +207,15 @@ export function createRecorder(options: RecorderOptions): Recorder {
     });
   }
 
+  // --- leaving the page ----------------------------------------------------------------------
+
+  // A click that loads a new page (a plain link, a form that posts) has no time to wait for its
+  // effects: record it before the page goes.
+  if (view) {
+    view.addEventListener('pagehide', finish);
+    cleanups.push(() => view.removeEventListener('pagehide', finish));
+  }
+
   // --- script errors and failed requests ------------------------------------------------------
 
   if (view) {

@@ -327,3 +327,15 @@ th {
 :root {
   --doccue-right: 424px;
 }
+
+.notice {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.card .button {
+  display: inline-block;
+  margin-top: 4px;
+}
