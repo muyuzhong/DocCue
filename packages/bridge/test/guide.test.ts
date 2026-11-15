@@ -91,6 +91,23 @@ describe('runGuide', () => {
     expect(low.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
   });
 
+  it('completes a step on something that is no control when the user clicks it', async () => {
+    document.body.innerHTML = `
+      <section id="panel"><h2 id="title"><span>CPU</span></h2><div class="chart"></div></section>
+      <section id="card"><h2>Memory</h2><button id="menu">菜单</button></section>`;
+    const running = start([
+      { selector: '#title', text: '点 CPU 面板的标题' },
+      { selector: '#card', text: '在这张卡片上打开菜单' },
+    ]);
+    $('#title span').click();
+    expect(bubbleText()).toBe('在这张卡片上打开菜单');
+    // A target that holds controls waits for one of them, as recorded: a click on its blank part is not it.
+    $('#card h2').click();
+    expect(bubbleText()).toBe('在这张卡片上打开菜单');
+    running.action($('#menu'));
+    await expect(running.done).resolves.toEqual({ outcome: 'completed', completedSteps: 2 });
+  });
+
   it('moves on with Next, waits for it on steps that only explain, and ends on Exit', async () => {
     const running = start([
       { selector: 'h1', text: '这里是新建页面', expect: 'ack' },

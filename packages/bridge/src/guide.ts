@@ -8,7 +8,7 @@
 import type { GuideResult, GuideStep } from '@doccue/protocol';
 import type { Messages } from './messages.js';
 import { isIgnored, isVisible } from './dom.js';
-import { CANDIDATE_SELECTOR, isInteractive } from './naming.js';
+import { CANDIDATE_SELECTOR, hasControlInside, isInteractive } from './naming.js';
 
 export type GuideEnd = Pick<GuideResult, 'outcome' | 'completedSteps' | 'skippedSteps'>;
 
@@ -207,6 +207,14 @@ export function runGuide(options: GuideOptions): RunningGuide {
   };
   view.addEventListener('scroll', follow, true);
   view.addEventListener('resize', follow);
+  // A step on something that is no control and holds none (a heading, a card, a chart): the
+  // recorder never sees a click there, so a click on it is what completes the step.
+  const clickedOn = (event: Event) => {
+    if (ended || !current || steps[index]!.expect === 'ack') return;
+    if (isInteractive(current) || hasControlInside(current) || !event.composedPath().includes(current)) return;
+    advance();
+  };
+  document.addEventListener('click', clickedOn, true);
 
   const finish = (end: GuideEnd | undefined) => {
     if (ended) return;
@@ -214,6 +222,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
     clearTimeout(timer);
     view.removeEventListener('scroll', follow, true);
     view.removeEventListener('resize', follow);
+    document.removeEventListener('click', clickedOn, true);
     host.remove();
     resolve(end);
   };
