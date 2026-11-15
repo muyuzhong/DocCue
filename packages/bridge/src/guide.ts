@@ -111,6 +111,23 @@ function overlap(a: Box, b: DOMRect): number {
   return width > 0 && height > 0 ? width * height : 0;
 }
 
+/**
+ * What the user sees of an element. Pages often hide a native checkbox or radio (transparent, or
+ * a sliver wide) and draw their own in its label: the spotlight goes on the label then. Only where
+ * the spotlight goes changes; the step still waits for the control itself.
+ */
+export function faceOf(element: Element): Element {
+  if (!['INPUT', 'SELECT', 'TEXTAREA'].includes(element.tagName)) return element;
+  const view = element.ownerDocument.defaultView;
+  const rect = element.getBoundingClientRect();
+  // Without layout (a test DOM) every box is 0 by 0: that alone says nothing.
+  const sliver = rect.width + rect.height > 0 && (rect.width < 4 || rect.height < 4);
+  const transparent = view?.getComputedStyle(element).opacity === '0';
+  if (!sliver && !transparent) return element;
+  const label = (element as HTMLInputElement).labels?.[0] ?? element.closest('label');
+  return label && isVisible(label) ? label : element;
+}
+
 /** Where DocCue's own chat panel is: the bubble must not go under it, or its buttons can't be clicked. */
 function panelArea(document: Document): DOMRect | undefined {
   const panel = document.querySelector('[data-doccue-panel]');
@@ -218,7 +235,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
   let chosenWith = '';
 
   function place(target: Element): void {
-    const rect = target.getBoundingClientRect();
+    const rect = faceOf(target).getBoundingClientRect();
     spot.style.left = `${rect.left - PAD}px`;
     spot.style.top = `${rect.top - PAD}px`;
     spot.style.width = `${rect.width + PAD * 2}px`;
@@ -246,8 +263,11 @@ export function runGuide(options: GuideOptions): RunningGuide {
       missingSince = undefined;
       if (!shown) {
         shown = true;
-        const rect = current.getBoundingClientRect();
-        if (rect.top < 0 || rect.bottom > view.innerHeight) current.scrollIntoView?.({ block: 'center' });
+        const face = faceOf(current);
+        const rect = face.getBoundingClientRect();
+        // Off the window: bring it to the middle. In the window, it may still be scrolled away
+        // inside a list or a panel that clips it: the least scrolling that shows it (none if shown).
+        face.scrollIntoView?.(rect.top < 0 || rect.bottom > view.innerHeight ? { block: 'center' } : { block: 'nearest', inline: 'nearest' });
         text.textContent = steps[index]!.text;
         progress.textContent = steps.length > 1 ? `${index + 1} / ${steps.length}` : '';
         next.textContent = index === steps.length - 1 ? messages.done : messages.next;

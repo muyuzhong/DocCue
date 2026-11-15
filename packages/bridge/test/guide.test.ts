@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runGuide, type RunningGuide } from '../src/guide.js';
 import { describeElement, findByLocator } from '../src/locate.js';
 import { messagesFor } from '../src/messages.js';
@@ -50,6 +50,45 @@ describe('runGuide', () => {
     running.action($('#test'));
     await expect(running.done).resolves.toEqual({ outcome: 'completed', completedSteps: 2 });
     expect(overlay()).toBeUndefined();
+  });
+
+  it('puts the spotlight on the label of a control the page hides to draw its own', async () => {
+    document.body.innerHTML = `
+      <ul><li><input id="d7" type="checkbox" style="opacity: 0" /><label for="d7" id="d7-label">最近 7 天</label></li></ul>
+      <p><input id="sliver" type="radio" /><label for="sliver" id="sliver-label">每天</label></p>`;
+    $('#d7').getBoundingClientRect = () => new DOMRect(300, 100, 0, 13);
+    $('#d7-label').getBoundingClientRect = () => new DOMRect(100, 90, 200, 38);
+    $('#sliver').getBoundingClientRect = () => new DOMRect(300, 200, 1, 1);
+    $('#sliver-label').getBoundingClientRect = () => new DOMRect(100, 190, 80, 30);
+    const spot = () => overlay()!.querySelector<HTMLElement>('.spot')!.style;
+    const running = start([
+      { selector: '#d7', text: '选最近 7 天' },
+      { selector: '#sliver', text: '选每天' },
+    ]);
+    expect([spot().left, spot().top, spot().width]).toEqual(['96px', '86px', '208px']);
+    // Done when the control itself changes, as clicking its label does.
+    running.action($('#d7'));
+    expect(bubbleText()).toBe('选每天');
+    expect([spot().left, spot().top, spot().width]).toEqual(['96px', '186px', '88px']);
+  });
+
+  it('scrolls a step into view, also inside a list that clips it', () => {
+    document.body.innerHTML = `<ul style="height: 40px; overflow: auto"><li>a</li><li><button id="far">最近 7 天</button></li></ul><button id="low">保存</button>`;
+    const far = $('#far');
+    const low = $('#low');
+    far.getBoundingClientRect = () => new DOMRect(100, 20, 80, 30);
+    low.getBoundingClientRect = () => new DOMRect(100, 5000, 80, 30);
+    far.scrollIntoView = vi.fn();
+    low.scrollIntoView = vi.fn();
+    const running = start([
+      { selector: '#far', text: '选最近 7 天' },
+      { selector: '#low', text: '保存' },
+    ]);
+    // In the window but maybe clipped by its list: the least scrolling that shows it.
+    expect(far.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+    running.action(far);
+    // Below the window: to the middle.
+    expect(low.scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
   });
 
   it('moves on with Next, waits for it on steps that only explain, and ends on Exit', async () => {
