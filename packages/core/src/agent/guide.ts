@@ -45,7 +45,7 @@ export function readSteps(args: unknown): { steps: GuideStep[] } | { problem: st
     try {
       steps = JSON.parse(steps);
     } catch {
-      return { problem: 'steps: send a JSON array of {"target", "text"} objects, not a string' };
+      return { problem: 'steps: send a JSON array of {"target", "text"} objects, not a string; this string is not even valid JSON (double quotes inside a text must be escaped, or write 「」 or “” instead)' };
     }
   }
   if (!Array.isArray(steps) || steps.length === 0) return { problem: 'steps: send a non-empty JSON array of {"target", "text"} objects' };

@@ -263,8 +263,10 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
             else await page.keyboard.press('Enter');
           }
         } else if (field) {
-          did = `type "${target.label}" = ${value ?? 'test'}`;
-          await target.handle.fill(value ?? 'test');
+          // A field the case has no value for gets something that fits it.
+          const typed = value ?? (target.type === 'number' ? '1' : 'test');
+          did = `type "${target.label}" = ${typed}`;
+          await target.handle.fill(typed);
           await target.handle.press('Tab');
         } else {
           did = `click ${target.role || target.tag} "${target.label}"`;

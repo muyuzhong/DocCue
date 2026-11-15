@@ -13,17 +13,21 @@ export const DEFAULT_INSTRUCTIONS =
   'You are the in-app assistant of this product. You help users get started and solve problems they run into while using it.';
 
 const CONTEXT_GUIDE = `Each user message starts with a <context> block written by the app, not by the user. It lists what the user did recently and what each action caused (latest last), followed by a tree of the screen the user is looking at. A number in brackets, like [3], identifies an element of that screen.
-Use the context to work out what the user is trying to do and what went wrong. Refer to controls by the names shown on screen, and only to controls that are there. Never mention the context block or the numbers to the user.
-Answer in the user's language (the locale given in the first context block, unless they write in another language), briefly and concretely.`;
+Use the context to work out what the user is trying to do and what went wrong. Refer to controls by the names shown on screen, quoted as they are shown, and only to controls that are there. Never mention the context block or the numbers to the user. Be brief and concrete.`;
 
-const GUIDE_GUIDE = `You cannot operate the app; the user does. When the answer involves something on the user's screen (where to click, which field to fix, how to get somewhere), show it with the guide tool instead of only describing it: say in one sentence what the problem or the plan is, then call guide. Put the instructions into the steps, not into your reply. The user's question sets the goal. When a guide comes back, check in the result whether that goal is reached: if it is, say so in a sentence and stop, even if other things on the page are unfinished or look wrong. If it is not reached and the next steps are on the screen, keep going with another guide call: never hand the rest of the task back as a list of instructions in words. A step the user skipped was their choice: don't guide them through it again, mention it in words if it matters. For questions that need no pointing, just answer.`;
+// Last in the system prompt, after the docs, where it weighs most; `otherLanguage` backs it up in
+// the context of a message in another script.
+const LANGUAGE = `Write your replies and the guide's steps in the language of the user's latest message, even when the screen, the docs or the locale are in another one. The locale given in the first context block only decides when the message shows no language (just a name or a number).`;
+
+const GUIDE_GUIDE = `You cannot operate the app; the user does. When the answer involves something on the user's screen (where to click, which field to fix, how to get somewhere), show it with the guide tool instead of only describing it: say in one sentence what the problem or the plan is, then call guide. Put the instructions into the steps, not into your reply. The user's question sets the goal. When a guide comes back, check in the result whether that goal is reached: if it is, say so in a sentence and stop, even if other things on the page are unfinished or look wrong. If it is not reached and the next steps are on the screen, keep going with another guide call: never hand the rest of the task back as a list of instructions in words. A step the user skipped was their choice: don't guide them through it again, mention it in words if it matters. For questions that need no pointing, just answer.
+You only act when the user asks or a guide comes back, so never say you will do something later. When the screen is still loading, guide one "ack" step on what is there, asking the user to press Next once it has loaded. Some controls only show while the pointer is over something (a menu on a card or a row) and are not on the screens you get: point at what they belong to, and say in the step where to hover and what to click.`;
 
 /** Recent actions shown per context block. */
 const MAX_ACTIONS = 20;
 
-/** The developer's instructions, how to read the context and when to guide, then any `extra` parts (e.g. the docs). */
+/** The developer's instructions, how to read the context and when to guide, any `extra` parts (e.g. the docs), then which language to write in. */
 export function buildSystemPrompt(instructions: string = DEFAULT_INSTRUCTIONS, extra: readonly string[] = []): string {
-  return [instructions.trim(), CONTEXT_GUIDE, GUIDE_GUIDE, ...extra].join('\n\n');
+  return [instructions.trim(), CONTEXT_GUIDE, GUIDE_GUIDE, ...extra, LANGUAGE].join('\n\n');
 }
 
 const quote = (text: string) => JSON.stringify(text);
@@ -117,6 +121,60 @@ function renderPerception(perception: Perception): string[] {
   return lines;
 }
 
+/** Writing systems, to tell a question's language apart from the locale's when they differ in script. */
+const SCRIPTS: Array<[name: string, letters: RegExp]> = [
+  ['han', /\p{Script=Han}/u],
+  ['kana', /[\p{Script=Hiragana}\p{Script=Katakana}]/u],
+  ['hangul', /\p{Script=Hangul}/u],
+  ['cyrillic', /\p{Script=Cyrillic}/u],
+  ['arabic', /\p{Script=Arabic}/u],
+  ['hebrew', /\p{Script=Hebrew}/u],
+  ['greek', /\p{Script=Greek}/u],
+  ['thai', /\p{Script=Thai}/u],
+  ['devanagari', /\p{Script=Devanagari}/u],
+  ['latin', /\p{Script=Latin}/u],
+];
+
+/** The scripts a language is written in, by its primary subtag. */
+const LOCALE_SCRIPTS: Record<string, string[]> = {
+  zh: ['han'],
+  ja: ['han', 'kana'],
+  ko: ['hangul', 'han'],
+  ru: ['cyrillic'],
+  uk: ['cyrillic'],
+  bg: ['cyrillic'],
+  sr: ['cyrillic', 'latin'],
+  ar: ['arabic'],
+  fa: ['arabic'],
+  he: ['hebrew'],
+  el: ['greek'],
+  th: ['thai'],
+  hi: ['devanagari'],
+};
+
+/** The script most of the text's letters are in, if it has a few. */
+function mainScript(text: string): string | undefined {
+  const counts = new Map<string, number>();
+  for (const char of text) {
+    const script = SCRIPTS.find(([, letters]) => letters.test(char))?.[0];
+    if (script) counts.set(script, (counts.get(script) ?? 0) + 1);
+  }
+  const [script, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [];
+  return script && count! >= 3 ? script : undefined;
+}
+
+/**
+ * Whether a message is clearly not in the locale's language: written in another script (an English
+ * question on a Chinese screen). A line in its context says so: the system prompt alone does not
+ * hold against a whole screen in the locale's language (Haiku 5.5 answered in Chinese, 3 times in 3).
+ */
+export function otherLanguage(text: string, locale: string | undefined): boolean {
+  if (!locale) return false;
+  const expected = LOCALE_SCRIPTS[locale.toLowerCase().split(/[-_]/)[0]!] ?? ['latin'];
+  const script = mainScript(text);
+  return script !== undefined && !expected.includes(script);
+}
+
 function renderUser(user: Record<string, unknown>): string {
   return Object.entries(user)
     .map(([key, value]) => `${key}=${typeof value === 'string' ? value : JSON.stringify(value)}`)
@@ -141,6 +199,7 @@ export function renderConversation({ conversation, locale, user }: RenderInput):
       const lines: string[] = [];
       if (first && user && Object.keys(user).length > 0) lines.push(`user: ${renderUser(user)}`);
       lines.push(...renderPerception(item.perception));
+      if (isLocale(locale) && otherLanguage(item.text, locale)) lines.push(`the message below is not in the locale's language: write in the language of the message`);
       const open = first && isLocale(locale) ? `<context locale="${locale}">` : '<context>';
       messages.push({ role: 'user', content: [open, unfence(lines.join('\n')), '</context>', unfence(item.text)].join('\n') });
       first = false;

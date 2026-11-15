@@ -1,6 +1,6 @@
 import type { Item, Perception } from '@doccue/protocol';
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, renderActions, renderConversation, renderLocator, renderScreen } from '../src/render/render.js';
+import { buildSystemPrompt, otherLanguage, renderActions, renderConversation, renderLocator, renderScreen } from '../src/render/render.js';
 
 const NOW = 1_700_000_000_000;
 
@@ -160,6 +160,21 @@ describe('renderConversation', () => {
   });
 });
 
+describe('otherLanguage', () => {
+  it('tells a message in another script from the locale, and leaves the rest alone', () => {
+    expect(otherLanguage('How do I add a new data source?', 'zh-Hans')).toBe(true);
+    expect(otherLanguage('怎么新建数据源？', 'en-US')).toBe(true);
+    expect(otherLanguage('Как добавить источник?', 'zh-CN')).toBe(true);
+    // Same script, or too little to tell: the locale decides.
+    expect(otherLanguage('怎么改 MySQL 的端口？', 'zh-CN')).toBe(false);
+    expect(otherLanguage('データソースを追加するには？', 'ja')).toBe(false);
+    expect(otherLanguage('Comment ajouter une source ?', 'en')).toBe(false);
+    expect(otherLanguage('3306?', 'zh-CN')).toBe(false);
+    expect(otherLanguage('OK', 'zh-CN')).toBe(false);
+    expect(otherLanguage('How do I add one?', undefined)).toBe(false);
+  });
+});
+
 describe('buildSystemPrompt', () => {
   it('puts the developer instructions first', () => {
     expect(buildSystemPrompt('  你是「数据平台」的助手。 ')).toMatch(/^你是「数据平台」的助手。\n\nEach user message starts with a <context> block/);
@@ -172,7 +187,7 @@ describe('readSteps', () => {
     const steps = [{ target: 9, text: '去掉 http://' }];
     expect(readSteps({ steps })).toEqual({ steps });
     expect(readSteps({ steps: JSON.stringify(steps) })).toEqual({ steps });
-    expect(readSteps({ steps: 'step one' })).toEqual({ problem: 'steps: send a JSON array of {"target", "text"} objects, not a string' });
+    expect(readSteps({ steps: 'step one' })).toEqual({ problem: expect.stringContaining('steps: send a JSON array of {"target", "text"} objects, not a string') });
     expect(readSteps({ steps: [] })).toEqual({ problem: 'steps: send a non-empty JSON array of {"target", "text"} objects' });
     expect(readSteps({ steps: [{ target: '9', text: 'x' }] })).toEqual({ problem: 'steps[0].target: expected the number of an element, like 3' });
   });
