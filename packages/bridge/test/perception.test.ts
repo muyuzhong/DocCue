@@ -39,6 +39,11 @@ describe('naming', () => {
     expect(locatorOf($('#cue'))).toEqual({ role: 'textbox', name: 'timeout', id: 'datasource.timeout' });
   });
 
+  it("keeps a label's block parts apart", () => {
+    document.body.innerHTML = `<label for="limit"><div>限制</div><div class="description">默认情况下显示的项目数量</div></label><input id="limit" />`;
+    expect(accessibleName($('#limit'))).toBe('限制 默认情况下显示的项目数量');
+  });
+
   it('adds the dialog, and the row or section when a name is not unique', () => {
     document.body.innerHTML = `
       <table><tbody>
@@ -161,6 +166,32 @@ describe('buildScreen', () => {
         ],
       },
       { role: 'status', name: '已保存草稿' },
+    ]);
+  });
+
+  it('reads the choice of a custom select from beside its empty input', () => {
+    // react-select's markup: the input only takes a filter; the choice is shown next to it.
+    document.body.innerHTML = `
+      <label for="tz">时区</label>
+      <div class="select">
+        <span aria-live="polite">option Default focused</span>
+        <div class="value-container"><div class="single-value">Default</div><div><input id="tz" role="combobox" aria-expanded="false" /></div></div>
+        <div class="indicator"><svg></svg></div>
+      </div>
+      <div class="select">
+        <div class="value-container"><div id="kind-placeholder" class="placeholder">请选择</div><div><input role="combobox" aria-label="数据库类型" aria-describedby="kind-placeholder" /></div></div>
+      </div>
+      <div class="field"><label for="q">搜索</label><input id="q" role="combobox" /><span>Default</span></div>`;
+    const { screen } = buildScreen(document, { errorSelectors: DEFAULT_ERROR_SELECTORS });
+    expect(screen.nodes).toEqual([
+      { role: 'status', name: 'option Default focused' },
+      { ref: 1, role: 'combobox', name: '时区', value: 'Default', states: ['collapsed'] },
+      // A placeholder is not a choice.
+      { role: 'text', name: '请选择' },
+      { ref: 2, role: 'combobox', name: '数据库类型', value: '' },
+      // Text next to a field with its own label is the page's, not the field's.
+      { ref: 3, role: 'combobox', name: '搜索', value: '' },
+      { role: 'text', name: 'Default' },
     ]);
   });
 

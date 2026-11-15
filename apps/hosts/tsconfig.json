@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "types": [
+      "node"
+    ],
+    "noEmit": true,
+    // Type-check against the built packages, the way a host app would use them.
+    "customConditions": []
+  },
+  "include": [
+    "*.ts",
+    "grafana"
+  ]
+}

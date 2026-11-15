@@ -1,0 +1,19 @@
+{
+  "name": "@doccue/hosts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "grafana": "pnpm -w build && tsx grafana/run.ts",
+    "look": "pnpm -w build && tsx look.ts",
+    "ask": "pnpm -w build && tsx ask.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@doccue/bridge": "workspace:*",
+    "@doccue/core": "workspace:*"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1",
+    "vite": "^8.3.5"
+  }
+}

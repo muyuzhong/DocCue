@@ -9,6 +9,9 @@ import { clean, clip, isIgnored, isVisible, textOf } from './dom.js';
 import { NOTICE_SELECTOR } from './errors.js';
 import { accessibleName, groupOf, hasControlInside, isInteractive, roleOf } from './naming.js';
 
+/** Parts of a custom select that are not its choice: live announcements, the placeholder, a shortcut hint. */
+const NOT_A_CHOICE = '[aria-live], [role="log"], [role="status"], [role="alert"], [id*="placeholder" i], [class*="placeholder" i], kbd';
+
 const SKIP_TAGS = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG', 'HEAD', 'META', 'LINK', 'OPTION']);
 const TEXT_TAGS = new Set(['P', 'LI', 'TD', 'TH', 'SPAN', 'DIV', 'DD', 'DT', 'SMALL', 'STRONG', 'EM', 'B', 'CAPTION', 'FIGCAPTION', 'BLOCKQUOTE', 'PRE', 'CODE']);
 const TEXT_FIELD_TYPES = new Set(['text', 'email', 'number', 'search', 'tel', 'url', 'date', 'datetime-local', 'month', 'time', 'week', 'color', '']);
@@ -43,7 +46,36 @@ interface Draft {
   children: Draft[];
 }
 
-function controlNode(element: Element): ScreenNode {
+/**
+ * The choice a custom select shows next to its input. react-select, Ant Design's Select and the
+ * like keep the input empty (it is only for typing a filter) and show the chosen option in an
+ * element beside it: look for that text in the smallest box around the input that holds no other
+ * control and no label or heading.
+ */
+function shownChoice(input: Element): { text: string; parts: Element[] } | undefined {
+  if ((input as HTMLInputElement).value) return undefined;
+  const describedBy = (input.getAttribute('aria-describedby') ?? '')
+    .split(/\s+/)
+    .map((id) => (id ? input.ownerDocument.getElementById(id) : null))
+    .filter((node): node is HTMLElement => node !== null);
+  let box: Element = input;
+  for (let level = 0; level < 4 && box.parentElement && box.parentElement.tagName !== 'BODY'; level++) {
+    box = box.parentElement;
+    if (box.tagName === 'LABEL' || box.querySelector('label, h1, h2, h3, h4, h5, h6, [role="heading"]')) return undefined;
+    const inside = Array.from(box.querySelectorAll('*'));
+    if (inside.some((element) => element !== input && isInteractive(element))) return undefined;
+    const parts = inside.filter((element) => {
+      if (element.contains(input) || !ownText(element) || !isVisible(element)) return false;
+      const excluded = element.closest(NOT_A_CHOICE);
+      if (excluded && box.contains(excluded)) return false;
+      return !describedBy.some((node) => node.contains(element));
+    });
+    if (parts.length > 0) return { text: clean(parts.map(ownText).join(' ')), parts };
+  }
+  return undefined;
+}
+
+function controlNode(element: Element, choice?: string): ScreenNode {
   const node: ScreenNode = { role: roleOf(element) };
   const name = accessibleName(element);
   if (name) node.name = name;
@@ -57,7 +89,7 @@ function controlNode(element: Element): ScreenNode {
       states.push('password');
       if (field.value) states.push('filled');
     } else if (TEXT_FIELD_TYPES.has(field.type) || tag === 'TEXTAREA') {
-      node.value = clip(field.value, 100);
+      node.value = clip(field.value || choice || '', 100);
     }
   } else if (tag === 'SELECT') {
     const chosen = Array.from((element as HTMLSelectElement).selectedOptions ?? []).map((option) => clean(option.textContent));
@@ -141,6 +173,17 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
   const maxElements = options.maxElements ?? 5000;
   let visited = 0;
 
+  // Custom selects: their choice goes into their value, and its text is not listed again.
+  const choices = new Map<Element, string>();
+  const shown = new Set<Element>();
+  for (const input of Array.from(document.querySelectorAll('input[role="combobox"]'))) {
+    if (isIgnored(input) || !isVisible(input)) continue;
+    const choice = shownChoice(input);
+    if (!choice) continue;
+    choices.set(input, choice.text);
+    for (const part of choice.parts) shown.add(part);
+  }
+
   const draft = (out: Draft[], node: ScreenNode, element: Element, numbered: boolean, urgent: boolean): Draft => {
     const made: Draft = { node, priority: urgent ? 0 : inView(element) ? 1 : 2, children: [], ...(numbered ? { element } : {}) };
     out.push(made);
@@ -158,7 +201,7 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
   const walk = (element: Element, out: Draft[], context: Context) => {
     if (++visited > maxElements) return;
     const tag = element.tagName.toUpperCase();
-    if (SKIP_TAGS.has(tag) || isIgnored(element) || !isVisible(element)) return;
+    if (SKIP_TAGS.has(tag) || shown.has(element) || isIgnored(element) || !isVisible(element)) return;
 
     if (/^H[1-6]$/.test(tag) || element.getAttribute('role') === 'heading') {
       const text = textOf(element);
@@ -166,7 +209,7 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
       return;
     }
     if (isInteractive(element)) {
-      draft(out, controlNode(element), element, true, context.inDialog);
+      draft(out, controlNode(element, choices.get(element)), element, true, context.inDialog);
       return;
     }
     const message = errorSelector && element.matches(errorSelector) ? 'alert' : element.matches(NOTICE_SELECTOR) ? 'status' : undefined;

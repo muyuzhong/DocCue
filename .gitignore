@@ -4,3 +4,4 @@ dist/
 .logs/
 .env
 .e2e/
+.cache/

@@ -106,10 +106,17 @@ export function roleOf(element: Element): string {
   }
 }
 
+const BLOCK_TAGS = new Set(['DIV', 'P', 'LI', 'UL', 'OL', 'DL', 'DT', 'DD', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'SECTION', 'HEADER', 'FOOTER', 'TABLE', 'TR', 'TD', 'TH', 'BR']);
+
 /** Text of a `<label>`, without the text of controls nested in it (e.g. a select's options). */
 function labelText(label: Element): string {
   const copy = label.cloneNode(true) as Element;
   copy.querySelectorAll('input, select, textarea, button').forEach((control) => control.remove());
+  // The copy has no layout: keep block parts apart ("Limit" and its description below it), as
+  // the page shows them, instead of running them together.
+  copy.querySelectorAll('*').forEach((element) => {
+    if (BLOCK_TAGS.has(element.tagName)) element.after(' ');
+  });
   return clean(copy.textContent);
 }
 
