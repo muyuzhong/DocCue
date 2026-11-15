@@ -1,6 +1,6 @@
 import type { ScreenNode } from '@doccue/protocol';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { collectErrors, DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
+import { collectErrors, collectNotices, DEFAULT_ERROR_SELECTORS } from '../src/errors.js';
 import { accessibleName, findControl, isInteractive, locatorOf, roleOf } from '../src/naming.js';
 import { buildScreen } from '../src/screen.js';
 
@@ -100,6 +100,17 @@ describe('errors', () => {
       { text: 'Invalid Host Format', target: { role: 'textbox', name: '主机地址' } },
       { text: '不能为空', target: { role: 'textbox', name: '名称' } },
     ]);
+  });
+});
+
+describe('notices', () => {
+  it('leaves out announcements made only for screen readers', () => {
+    document.body.innerHTML = `
+      <span role="log" aria-live="polite" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(1px, 1px, 1px, 1px)">1 result available for search term CSV</span>
+      <div role="status" style="clip-path: inset(50%)">option focused</div>
+      <div role="status">已保存草稿</div>`;
+    expect(collectNotices(document)).toEqual(['已保存草稿']);
+    expect(buildScreen(document, { errorSelectors: DEFAULT_ERROR_SELECTORS }).screen.nodes).toEqual([{ role: 'status', name: '已保存草稿' }]);
   });
 });
 

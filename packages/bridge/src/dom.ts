@@ -37,6 +37,26 @@ export function isVisible(element: Element): boolean {
   return true;
 }
 
+/**
+ * Text only screen readers get: the usual "visually hidden" styles, clipped to nothing or squeezed
+ * into a pixel (e.g. react-select's announcements, "1 result available…").
+ */
+export function isScreenReaderOnly(element: Element): boolean {
+  const view = element.ownerDocument.defaultView;
+  if (!view) return false;
+  const style = view.getComputedStyle(element);
+  const clip = /^rect\(([^)]*)\)$/.exec(style.clip ?? '');
+  if (clip) {
+    const [top, right, bottom, left] = clip[1]!.split(/[\s,]+/).map((part) => parseFloat(part));
+    if (top === bottom || right === left) return true;
+  }
+  if (/^inset\(\s*50%\s*\)$/.test(style.clipPath ?? '')) return true;
+  const rect = element.getBoundingClientRect();
+  // Without layout (a test DOM) every box is 0 by 0: that alone says nothing.
+  const pixel = rect.width + rect.height > 0 && rect.width <= 1 && rect.height <= 1;
+  return pixel && (style.position === 'absolute' || style.position === 'fixed') && style.overflow === 'hidden';
+}
+
 /** Visible text of an element, whitespace collapsed. */
 export function textOf(element: Element): string {
   const html = element as HTMLElement;

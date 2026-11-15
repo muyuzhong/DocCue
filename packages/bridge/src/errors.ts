@@ -1,6 +1,6 @@
 /** Finds error messages and notices currently shown on the page. */
 import type { Locator } from '@doccue/protocol';
-import { clip, isIgnored, isVisible, textOf } from './dom.js';
+import { clip, isIgnored, isScreenReaderOnly, isVisible, textOf } from './dom.js';
 import { CANDIDATE_SELECTOR, isInteractive, locatorOf } from './naming.js';
 
 /** Where error messages usually live: generic markers plus common UI libraries. */
@@ -61,7 +61,7 @@ export function collectErrors(document: Document, selectors: readonly string[]):
 export function collectNotices(document: Document): string[] {
   const notices: string[] = [];
   for (const element of Array.from(document.querySelectorAll(NOTICE_SELECTOR))) {
-    if (isIgnored(element) || !isVisible(element)) continue;
+    if (isIgnored(element) || !isVisible(element) || isScreenReaderOnly(element)) continue;
     const text = textOf(element);
     if (text && !notices.includes(text)) notices.push(clip(text, 200));
   }

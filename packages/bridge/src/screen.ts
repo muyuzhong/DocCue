@@ -5,7 +5,7 @@
  * maps each number back to its element.
  */
 import type { Screen, ScreenNode } from '@doccue/protocol';
-import { clean, clip, isIgnored, isVisible, textOf } from './dom.js';
+import { clean, clip, isIgnored, isScreenReaderOnly, isVisible, textOf } from './dom.js';
 import { NOTICE_SELECTOR } from './errors.js';
 import { accessibleName, groupOf, hasControlInside, isInteractive, roleOf } from './naming.js';
 
@@ -216,6 +216,8 @@ export function buildScreen(document: Document, options: ScreenOptions): Snapsho
     // A message is listed as its text. A live region around controls (a whole panel marked
     // aria-live, say) is a group instead, or the controls in it would be lost.
     if (message && !hasControlInside(element)) {
+      // Announcements for screen readers only: nothing on screen to point at or read.
+      if (isScreenReaderOnly(element)) return;
       const text = textOf(element);
       if (text) draft(out, { role: message, name: clip(text, 200) }, element, false, true);
       return;
