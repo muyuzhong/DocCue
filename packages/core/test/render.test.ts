@@ -171,6 +171,10 @@ describe('otherLanguage', () => {
     expect(otherLanguage('Comment ajouter une source ?', 'en')).toBe(false);
     expect(otherLanguage('3306?', 'zh-CN')).toBe(false);
     expect(otherLanguage('OK', 'zh-CN')).toBe(false);
+    // Mixed text: product names in Latin letters, a label quoted from the screen. The model judges.
+    expect(otherLanguage('Prometheus datasource 怎么加？', 'zh-CN')).toBe(false);
+    expect(otherLanguage('How do I click 连接?', 'en')).toBe(false);
+    expect(otherLanguage('MySQL 怎么连？', 'en')).toBe(false);
     expect(otherLanguage('How do I add one?', undefined)).toBe(false);
   });
 });

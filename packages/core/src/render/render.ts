@@ -152,27 +152,29 @@ const LOCALE_SCRIPTS: Record<string, string[]> = {
   hi: ['devanagari'],
 };
 
-/** The script most of the text's letters are in, if it has a few. */
-function mainScript(text: string): string | undefined {
+/** How many letters of the text are in each script. */
+function scriptCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>();
   for (const char of text) {
     const script = SCRIPTS.find(([, letters]) => letters.test(char))?.[0];
     if (script) counts.set(script, (counts.get(script) ?? 0) + 1);
   }
-  const [script, count] = [...counts].sort((a, b) => b[1] - a[1])[0] ?? [];
-  return script && count! >= 3 ? script : undefined;
+  return counts;
 }
 
 /**
- * Whether a message is clearly not in the locale's language: written in another script (an English
- * question on a Chinese screen). A line in its context says so: the system prompt alone does not
- * hold against a whole screen in the locale's language (Haiku 5.5 answered in Chinese, 3 times in 3).
+ * Whether a message is clearly not in the locale's language: it has a few letters and none of
+ * them in the locale's scripts (an English question on a Chinese screen). A line in its context
+ * says so: the system prompt alone does not hold against a whole screen in the locale's language
+ * (Haiku 5.5 answered in Chinese, 3 times in 3). Mixed text ("Prometheus datasource 怎么加？",
+ * "How do I click 连接?") gets no line: the model judges it.
  */
 export function otherLanguage(text: string, locale: string | undefined): boolean {
   if (!locale) return false;
   const expected = LOCALE_SCRIPTS[locale.toLowerCase().split(/[-_]/)[0]!] ?? ['latin'];
-  const script = mainScript(text);
-  return script !== undefined && !expected.includes(script);
+  const counts = scriptCounts(text);
+  const letters = [...counts.values()].reduce((sum, count) => sum + count, 0);
+  return letters >= 3 && expected.every((script) => !counts.has(script));
 }
 
 function renderUser(user: Record<string, unknown>): string {

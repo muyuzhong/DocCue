@@ -33,8 +33,8 @@ interface Case {
   /** Only look at the first step, then stop. */
   firstOnly?: boolean;
   goal?: (grafana: Grafana, page: Page) => Promise<boolean>;
-  /** The language the answer must be in (judged by its script), when it differs from the UI's. */
-  answerIn?: 'en';
+  /** The language the answer must be in (judged by its script). */
+  answerIn?: 'en' | 'zh';
   /** Also passes when this holds for the bubbles and the answer, e.g. a hint the script can't follow. */
   orSaid?: RegExp;
 }
@@ -130,6 +130,19 @@ const cases: Case[] = [
     answerIn: 'en',
     first: /连接|数据源|添加新连接|新建|connection|data source/i,
     firstOnly: true,
+  },
+  {
+    // Chinese with product words in English: the message's language is still Chinese.
+    name: 'mixed-zh',
+    start: '/connections/datasources/edit/prometheus-prod',
+    prepare: async (page) => {
+      await page.getByRole('button', { name: '保存并测试' }).click();
+      await page.waitForTimeout(3000);
+    },
+    question: 'prometheus-prod 这个 datasource 为什么 test 失败了？',
+    first: /URL/i,
+    firstOnly: true,
+    answerIn: 'zh',
   },
   {
     name: 'no-guide',
@@ -290,11 +303,13 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     if (test.first === null && guided) why = 'guided, but no guide was wanted';
     else if (test.first && !(first !== undefined && test.first.test(first))) why = 'first step pointed elsewhere';
     else if (test.goal && !test.firstOnly && !(await test.goal(grafana, page))) why = 'goal not reached';
-    if (!why && test.answerIn === 'en') {
+    if (!why && test.answerIn) {
       const said = `${steps.join(' ')} ${answer}`;
       const cjk = (said.match(/[\u4e00-\u9fff]/g) ?? []).length;
       const latin = (said.match(/[A-Za-z]/g) ?? []).length;
-      if (cjk >= latin) why = 'answered in Chinese to an English question';
+      if (test.answerIn === 'en' && cjk >= latin) why = 'answered in Chinese to an English question';
+      // Chinese with names and URLs in Latin letters: a good share of Chinese characters is enough.
+      if (test.answerIn === 'zh' && cjk < 20) why = 'answered in English to a Chinese question';
     }
     if (why && test.orSaid?.test(`${steps.join(' ')} ${answer}`)) why = undefined;
     const pass = why === undefined;
