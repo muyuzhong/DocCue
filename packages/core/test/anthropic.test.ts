@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createAnthropic } from '../src/model/anthropic.js';
+import { createModelFromEnv } from '../src/model/env.js';
 import { ModelError } from '../src/model/errors.js';
 import type { Message, ModelDone } from '../src/model/types.js';
 import { collect, mockFetch, sseResponse } from './helpers.js';
@@ -25,6 +26,10 @@ const toolTurnEvents = [
   ev('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 42 } }),
   ev('message_stop', {}),
 ];
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('createAnthropic', () => {
   it('streams text and assembles thinking, text and tool calls in order', async () => {
@@ -89,6 +94,15 @@ describe('createAnthropic', () => {
     expect(call.headers).not.toHaveProperty('anthropic-beta');
     for (const key of ['fallbacks', 'cache_control']) expect(call.body).not.toHaveProperty(key);
     expect((call.body.tools as Record<string, unknown>[])[0]).not.toHaveProperty('eager_input_streaming');
+  });
+
+  it('turns prompt caching on behind a custom base URL with DOCCUE_PROMPT_CACHE=on', async () => {
+    const { fetch, calls } = mockFetch(sseResponse(toolTurnEvents));
+    vi.stubGlobal('fetch', fetch);
+    const env = { DOCCUE_PROVIDER: 'anthropic', ANTHROPIC_API_KEY: 'k', DOCCUE_BASE_URL: 'https://relay.example.com' };
+    await collect(createModelFromEnv({ ...env, DOCCUE_PROMPT_CACHE: 'on' }).stream({ messages: [{ role: 'user', content: 'hi' }] }));
+    expect(calls[0]!.body.cache_control).toEqual({ type: 'ephemeral' });
+    expect(() => createModelFromEnv({ ...env, DOCCUE_PROMPT_CACHE: 'yes' })).toThrow(/DOCCUE_PROMPT_CACHE/);
   });
 
   it('replays history: raw blocks unchanged, tool results and follow-up text merged into one user turn', async () => {

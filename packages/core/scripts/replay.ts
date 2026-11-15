@@ -40,12 +40,16 @@ if (which === undefined) {
   console.log(`[原来：${call.model}]\n${call.error ? `出错：${call.error.message}` : textOf(call.result?.message)}\n`);
   console.log(`[重发：${model.model}]`);
   const started = Date.now();
+  let first: number | undefined;
   for await (const event of model.stream(call.request)) {
-    if (event.type === 'text') process.stdout.write(event.delta);
+    if (event.type === 'text') {
+      first ??= Date.now() - started;
+      process.stdout.write(event.delta);
+    }
     if (event.type === 'done') {
       const calls = event.message.content.filter((part) => part.type === 'tool_call');
       for (const tool of calls) process.stdout.write(`\n[调用 ${tool.name} ${tool.rawArgs}]`);
-      console.log(`\n\n[${event.stopReason}；${Date.now() - started}ms；输入 ${event.usage.inputTokens}，输出 ${event.usage.outputTokens} tokens]`);
+      console.log(`\n\n[${event.stopReason}；首字 ${first ?? '-'}ms，共 ${Date.now() - started}ms；输入 ${event.usage.inputTokens}（缓存读 ${event.usage.cacheReadTokens}，写 ${event.usage.cacheWriteTokens}），输出 ${event.usage.outputTokens} tokens]`);
     }
   }
 }

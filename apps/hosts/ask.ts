@@ -33,6 +33,10 @@ interface Case {
   /** Only look at the first step, then stop. */
   firstOnly?: boolean;
   goal?: (grafana: Grafana, page: Page) => Promise<boolean>;
+  /** The language the answer must be in (judged by its script), when it differs from the UI's. */
+  answerIn?: 'en';
+  /** Also passes when this holds for the bubbles and the answer, e.g. a hint the script can't follow. */
+  orSaid?: RegExp;
 }
 
 const dashboard = async (grafana: Grafana) =>
@@ -100,6 +104,8 @@ const cases: Case[] = [
     start: '/d/service-overview',
     question: '把 CPU 这个面板的标题改成 CPU usage，再保存仪表盘，带我做一遍。',
     values: [[/标题|title/i, 'CPU usage']],
+    // The panel's menu only shows while the pointer is over the panel: a hint the script can't follow.
+    orSaid: /悬停|移到|hover/i,
     goal: async (grafana) => (await dashboard(grafana)).panels.some((panel) => panel.id === 3 && panel.title === 'CPU usage'),
   },
   {
@@ -121,6 +127,7 @@ const cases: Case[] = [
     name: 'english-add-datasource',
     start: '/',
     question: 'How do I add a new data source?',
+    answerIn: 'en',
     first: /连接|数据源|添加新连接|新建|connection|data source/i,
     firstOnly: true,
   },
@@ -171,6 +178,12 @@ const valueFor = (test: Case, label: string) => test.values?.find(([pattern]) =>
 
 interface Report {
   pass: boolean;
+  /** Why it failed, when it did. */
+  why?: string;
+  /** guide calls the backend sent back to the model as invalid. */
+  rejected: number;
+  /** Time to the first text, per model call. */
+  firstOutput: number[];
   first?: string;
   steps: string[];
   answer: string;
@@ -201,10 +214,21 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     const deadline = Date.now() + 300_000;
     let last = '';
     let repeats = 0;
+    let loadingSince: number | undefined;
     await page.waitForFunction(() => window.doccue.guiding() || !window.doccue.busy(), null, { timeout: 240_000, polling: 100 });
     while (await page.evaluate(() => window.doccue?.busy() ?? true).catch(() => true)) {
       try {
         if (Date.now() > deadline) throw new Error('did not finish in time');
+        // A page stuck loading: reload it, as a person would after a while.
+        const loading = await page.evaluate(() => /正在加载|Loading\.\.\./.test(document.body.innerText));
+        loadingSince = loading ? (loadingSince ?? Date.now()) : undefined;
+        if (loadingSince !== undefined && Date.now() - loadingSince > 6000) {
+          steps.push('(page stuck loading: reload)');
+          loadingSince = undefined;
+          await page.reload();
+          await page.waitForTimeout(1000);
+          continue;
+        }
         if (!(await bubble.isVisible())) {
           await page.waitForTimeout(300);
           continue;
@@ -257,13 +281,25 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     const said = await page.locator('[data-doccue-panel] .message.assistant').allInnerTexts().catch(() => []);
     const answer = (said.at(-1) ?? '').replace(/\s+/g, ' ').slice(0, 200);
 
-    let pass = true;
-    if (test.first === null) pass = !guided;
-    else if (test.first) pass = first !== undefined && test.first.test(first);
-    if (pass && test.goal && !test.firstOnly) pass = await test.goal(grafana, page);
+    let why: string | undefined;
+    if (test.first === null && guided) why = 'guided, but no guide was wanted';
+    else if (test.first && !(first !== undefined && test.first.test(first))) why = 'first step pointed elsewhere';
+    else if (test.goal && !test.firstOnly && !(await test.goal(grafana, page))) why = 'goal not reached';
+    if (!why && test.answerIn === 'en') {
+      const said = `${steps.join(' ')} ${answer}`;
+      const cjk = (said.match(/[\u4e00-\u9fff]/g) ?? []).length;
+      const latin = (said.match(/[A-Za-z]/g) ?? []).length;
+      if (cjk >= latin) why = 'answered in Chinese to an English question';
+    }
+    if (why && test.orSaid?.test(`${steps.join(' ')} ${answer}`)) why = undefined;
+    const pass = why === undefined;
 
     const records = readFileSync(grafana.proxy.logFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as LogRecord);
     const calls = records.filter((record) => record.kind === 'model_call');
+    const rejected = new Set<string>();
+    for (const call of calls)
+      for (const message of call.request.messages)
+        if (message.role === 'tool') for (const result of message.results) if (result.isError) rejected.add(result.callId);
     const tokens = { input: 0, cached: 0, output: 0 };
     for (const call of calls) {
       const usage = call.result?.usage;
@@ -274,6 +310,9 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     }
     return {
       pass,
+      ...(why ? { why } : {}),
+      rejected: rejected.size,
+      firstOutput: calls.flatMap((call) => (call.firstOutputMs === undefined ? [] : [call.firstOutputMs])),
       first,
       steps,
       answer,
@@ -302,11 +341,14 @@ try {
       console.log(`   first step: ${report.first ?? '(no guide)'}`);
       for (const step of report.steps) console.log(`     ${step}`);
       console.log(`   answer: ${report.answer}`);
+      const seconds = (ms: number) => (ms / 1000).toFixed(1);
+      const firsts = report.firstOutput;
       console.log(
-        `   ${report.calls} model calls, ${(report.modelMs / 1000).toFixed(1)} s in the model (slowest ${(report.slowestMs / 1000).toFixed(1)} s), ` +
+        `   ${report.calls} model calls${report.rejected ? ` (${report.rejected} guide calls rejected)` : ''}, ${seconds(report.modelMs)} s in the model (slowest ${seconds(report.slowestMs)} s` +
+          `${firsts.length ? `, first text after ${seconds(firsts.reduce((a, b) => a + b, 0) / firsts.length)} s on average` : ''}), ` +
           `${report.tokens.input} input tokens (${report.tokens.cached} cached), ${report.tokens.output} output; ${(report.wallMs / 1000).toFixed(0)} s in all`,
       );
-      console.log(`   ${report.pass ? 'PASS' : 'FAIL'}`);
+      console.log(`   ${report.pass ? 'PASS' : `FAIL: ${report.why}`}`);
     } catch (error) {
       console.log(`   error: ${error instanceof Error ? error.message : String(error)}`);
       console.log('   FAIL');
