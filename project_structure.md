@@ -24,11 +24,13 @@
 
 - 自带问答窗：回答流式显示，查文档时显示"正在查文档…"，引导时收成小条、可展开，后端出错时提示出错。
 
-单步评测 7 个场景、多步评测 3 个场景全部通过。
+单步评测 7 个场景、多步评测 4 个场景全部通过。
 
 **首轮只做主干**，略过的边界情况已在第二轮补完（批次见 `architecture_design.md` 第十二节）。还剩下：
 
 - 文档检索只是关键词匹配，没有同义词和词形变化。
+
+**第三轮：接真实应用**（进行中，见 `architecture_design.md` 第十三节）。先接 Grafana OSS：不改它的代码，用注入代理把 bridge 加到它的页面上，用真实模型提问、脚本扮演用户。
 
 ## 代码在哪
 
@@ -70,6 +72,12 @@ apps/
     e2e/demo.ts           本机 Chrome 端到端跑一遍
     e2e/journeys.ts       多步评测：脚本扮演用户，跟着引导走到目标状态
   evals/                  评测：固定页面 + 问题 → 第一步应该指向哪个控件，用真实模型跑
+  hosts/                  接真实应用（不是为 DocCue 写的）：
+    proxy.ts              注入代理：给应用的每个 HTML 页面加上 bridge（从 dist 打包，像宿主自己的构建那样），/doccue 挂接口，其余原样转发（含 WebSocket）；只监听 127.0.0.1
+    inject.ts             宿主前端要加的那几行：createBridge + mount
+    grafana/              Grafana OSS：下载发布包（校验 SHA-256，放在 .cache/）、匿名管理员、预置数据源和自动刷新的仪表盘
+    look.ts               不调模型：在几个典型界面上导出 agent 看到的快照，统计无名控件、被上限裁掉的节点、够不着的内容
+    ask.ts                调真实模型：脚本扮演用户提问并跟着引导走，报告第一步指向、每一步、是否达成、模型耗时和 token
 ```
 
 依赖方向：`bridge` 和 `core` 都只依赖 `protocol`，互不依赖。`core` 内部从里到外是 model → loop → render → agent → server，里层不知道外层。
@@ -98,3 +106,6 @@ apps/
 - `pnpm playground`：演示页面。
 - `pnpm --filter @doccue/playground e2e`：本机 Chrome 自动操作演示页面并提问，跟着引导走，打印模型看到的内容和回答。
 - `pnpm replay <日志> [编号]`：把日志里的一次模型调用原样重发。
+- `pnpm --filter @doccue/hosts grafana`：Grafana + DocCue，手动试（http://localhost:5180）。第一次会下载约 500 MB 的 Grafana 发布包。
+- `pnpm --filter @doccue/hosts look [界面名片段]`：Grafana 上 agent 看到了什么，不调模型。
+- `pnpm --filter @doccue/hosts ask [场景名片段]`：Grafana 上的真实模型场景，每个场景一个新的 Grafana。不在 `pnpm test` 里（要下载 Grafana）。

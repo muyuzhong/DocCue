@@ -66,6 +66,22 @@ const cases: Case[] = [
     goal: async (grafana) => ((await grafana.api('/api/datasources')) as Array<{ type: string; name: string; url: string }>).some((d) => d.type === 'mysql' && d.name === 'orders' && d.url === '10.0.0.8:3306'),
   },
   {
+    name: 'fix-mysql-form',
+    start: '/connections/datasources/edit/mysql-orders',
+    question: '帮我把这个 MySQL 数据源改成连 10.0.0.8:3306，数据库 shop，用户名 app，密码 secret，然后保存。带我做一遍。',
+    values: [
+      [/host/i, '10.0.0.8:3306'],
+      [/database|数据库/i, 'shop'],
+      [/user|用户/i, 'app'],
+      [/password|密码/i, 'secret'],
+    ],
+    first: /host/i,
+    goal: async (grafana) => {
+      const saved = (await grafana.api('/api/datasources/uid/mysql-orders')) as { url: string; user: string; jsonData: { database?: string }; secureJsonFields: { password?: boolean } };
+      return saved.url === '10.0.0.8:3306' && saved.user === 'app' && saved.jsonData.database === 'shop' && saved.secureJsonFields.password === true;
+    },
+  },
+  {
     name: 'refresh-off',
     start: '/d/service-overview',
     question: '这个仪表盘一直在自动刷新，怎么关掉？',

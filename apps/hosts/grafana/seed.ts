@@ -6,6 +6,8 @@ export const DATASOURCES = [
   { name: 'TestData', ...TESTDATA, access: 'proxy', isDefault: true },
   // Nothing listens there: "Save & test" fails with a connection error.
   { name: 'prometheus-prod', type: 'prometheus', uid: 'prometheus-prod', access: 'proxy', url: 'http://127.0.0.1:9' },
+  // Points at a host that doesn't exist: for fixing a form and saving it.
+  { name: 'mysql-orders', type: 'mysql', uid: 'mysql-orders', access: 'proxy', url: 'db.internal:3306', user: 'root', jsonData: { database: 'orders' } },
 ];
 
 const panel = (id: number, type: string, title: string, gridPos: { x: number; y: number; w: number; h: number }) => ({
