@@ -39,6 +39,14 @@ describe('naming', () => {
     expect(locatorOf($('#cue'))).toEqual({ role: 'textbox', name: 'timeout', id: 'datasource.timeout' });
   });
 
+  it("prefers a field's visible label to its aria-label, without the required mark", () => {
+    document.body.innerHTML = `
+      <label for="url">Prometheus server URL *</label><input id="url" aria-label="Data source connection URL" />
+      <label for="name">* 名称</label><input id="name" />
+      <input id="search" aria-label="搜索" placeholder="输入关键字" />`;
+    expect(['url', 'name', 'search'].map((id) => accessibleName($(`#${id}`)))).toEqual(['Prometheus server URL', '名称', '搜索']);
+  });
+
   it("keeps a label's block parts apart", () => {
     document.body.innerHTML = `<label for="limit"><div>限制</div><div class="description">默认情况下显示的项目数量</div></label><input id="limit" />`;
     expect(accessibleName($('#limit'))).toBe('限制 默认情况下显示的项目数量');

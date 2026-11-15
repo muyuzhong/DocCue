@@ -117,7 +117,8 @@ function labelText(label: Element): string {
   copy.querySelectorAll('*').forEach((element) => {
     if (BLOCK_TAGS.has(element.tagName)) element.after(' ');
   });
-  return clean(copy.textContent);
+  // The asterisk of a required field is not part of its name.
+  return clean(copy.textContent).replace(/^\*\s*|\s*\*$/g, '');
 }
 
 /** The accessible name, roughly as a screen reader would announce it. */
@@ -135,16 +136,22 @@ export function accessibleName(element: Element): string {
     );
     if (text) return clip(text, 40);
   }
+  const tag = element.tagName.toLowerCase();
+  const isField = tag === 'input' || tag === 'select' || tag === 'textarea';
+  // A field's own visible label beats its aria-label: the guide's bubble should use the words the
+  // user sees next to it (Grafana labels a field "Prometheus server URL" and aria-labels it
+  // "Data source connection URL").
+  if (isField) {
+    const fromLabels = clean(Array.from((element as HTMLInputElement).labels ?? []).map(labelText).join(' '));
+    if (fromLabels) return clip(fromLabels, 40);
+  }
   const ariaLabel = clean(element.getAttribute('aria-label'));
   if (ariaLabel) return clip(ariaLabel, 40);
 
-  const tag = element.tagName.toLowerCase();
-  if (tag === 'input' || tag === 'select' || tag === 'textarea') {
+  if (isField) {
     const field = element as HTMLInputElement;
     if (['button', 'submit', 'reset'].includes(field.type) && clean(field.value)) return clip(clean(field.value), 40);
     if (field.type === 'image' && clean(field.alt)) return clip(clean(field.alt), 40);
-    const fromLabels = clean(Array.from(field.labels ?? []).map(labelText).join(' '));
-    if (fromLabels) return clip(fromLabels, 40);
     for (const candidate of [field.getAttribute('placeholder'), field.getAttribute('title')]) {
       if (clean(candidate)) return clip(clean(candidate), 40);
     }
