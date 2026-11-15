@@ -10,9 +10,13 @@ let recorder: Recorder | undefined;
 let entries: TimelineEntry[];
 const originalFetch = window.fetch;
 
+let acted: Element[];
+
 function start(windowMs = 60) {
   entries = [];
+  acted = [];
   recorder = createRecorder({
+    onAction: (element) => acted.push(element),
     document,
     errorSelectors: DEFAULT_ERROR_SELECTORS,
     resultWindowMs: windowMs,
@@ -140,6 +144,27 @@ describe('createRecorder', () => {
     expect(entries.map((entry) => entry.effects)).toEqual([
       [{ type: 'request_failed', method: 'POST', path: '/api/test-connection', status: 500, message: 'connection refused' }],
     ]);
+  });
+
+  it('records picking from a custom dropdown as one select on the dropdown, by click or Enter', async () => {
+    // react-select's markup: the input controls a list rendered elsewhere (a portal).
+    document.body.innerHTML = `
+      <label for="scenario">场景</label>
+      <div><div class="single-value">Random Walk</div><input id="scenario" role="combobox" aria-expanded="true" aria-controls="menu" /></div>
+      <div id="portal"><div role="listbox" id="menu">
+        <div role="option" id="o1">Random Walk</div><div role="option" id="o2"><span>CSV Metric Values</span></div>
+      </div></div>`;
+    start(20);
+    $('#o2 span').click();
+    await sleep(40);
+    expect(entries.map((entry) => entry.action)).toEqual([{ type: 'select', target: { role: 'combobox', name: '场景' }, value: 'CSV Metric Values' }]);
+    // A guide step on the dropdown or on the option itself counts as done.
+    expect(acted).toEqual([$('#scenario'), $('#o2')]);
+
+    $('#scenario').setAttribute('aria-activedescendant', 'o1');
+    $('#scenario').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(40);
+    expect(entries.at(-1)!.action).toEqual({ type: 'select', target: { role: 'combobox', name: '场景' }, value: 'Random Walk' });
   });
 
   it('ignores the assistant’s own UI and finishes the open action on flush', () => {

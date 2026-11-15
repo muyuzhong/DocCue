@@ -6,7 +6,7 @@
 import type { ActionType, Effect, Locator, PageInfo, TimelineEntry } from '@doccue/protocol';
 import { clean, clip, isIgnored, isVisible } from './dom.js';
 import { collectErrors, collectNotices } from './errors.js';
-import { dialogTitle, findControl, locatorOf } from './naming.js';
+import { accessibleName, dialogTitle, findControl, locatorOf } from './naming.js';
 
 export interface RecorderOptions {
   document: Document;
@@ -18,7 +18,10 @@ export interface RecorderOptions {
   /** Requests to leave out, e.g. the bridge's own. */
   skipUrl: (url: string) => boolean;
   onEntry: (entry: TimelineEntry) => void;
-  /** Called right when the user acts on a control, before its effects are known. */
+  /**
+   * Called right when the user acts on a control, before its effects are known. Picking an option
+   * of a custom dropdown calls it for the dropdown and for the option.
+   */
   onAction?: (element: Element) => void;
 }
 
@@ -42,6 +45,28 @@ interface Pending {
 
 const NON_CLICK_INPUTS = new Set(['text', 'email', 'number', 'search', 'tel', 'url', 'password', 'checkbox', 'radio', 'file', 'range', 'date', 'datetime-local', 'month', 'time', 'week', 'color', '']);
 
+/**
+ * The dropdown an option belongs to: the combobox whose list it is in (`aria-controls` or
+ * `aria-owns`), the one highlighting it, or the open combobox that has the focus.
+ */
+function dropdownOf(option: Element): Element | undefined {
+  const document = option.ownerDocument;
+  const owners = (attribute: string, id: string) =>
+    Array.from(document.querySelectorAll(`[${attribute}]`)).find((element) => element.getAttribute(attribute)!.split(/\s+/).includes(id));
+  const list = option.closest('[role="listbox"]');
+  if (list?.id) {
+    const owner = owners('aria-controls', list.id) ?? owners('aria-owns', list.id);
+    if (owner) return owner;
+  }
+  if (option.id) {
+    const owner = owners('aria-activedescendant', option.id);
+    if (owner) return owner;
+  }
+  const focused = document.activeElement;
+  if (focused?.getAttribute('role') === 'combobox' && focused.getAttribute('aria-expanded') === 'true') return focused;
+  return undefined;
+}
+
 export function createRecorder(options: RecorderOptions): Recorder {
   const { document } = options;
   const view = document.defaultView as (Window & typeof globalThis) | null;
@@ -63,9 +88,10 @@ export function createRecorder(options: RecorderOptions): Recorder {
     options.onEntry(unique.size > 0 ? { ...entry, effects: [...unique.values()] } : entry);
   };
 
-  const record = (element: Element, type: ActionType, target: Locator, value?: string) => {
+  const record = (element: Element, type: ActionType, target: Locator, value?: string, also?: Element) => {
     finish();
     options.onAction?.(element);
+    if (also) options.onAction?.(also);
     const entry: TimelineEntry = { at: Date.now(), action: { type, target, ...(value === undefined ? {} : { value }) } };
     pending = { entry, effects: [], timer: setTimeout(finish, options.resultWindowMs) };
   };
@@ -83,9 +109,18 @@ export function createRecorder(options: RecorderOptions): Recorder {
 
   // --- user actions ---------------------------------------------------------------------------
 
+  /** A custom dropdown's option was picked: one `select` on the dropdown, with the option as the value. */
+  const pick = (option: Element): boolean => {
+    const dropdown = dropdownOf(option);
+    if (!dropdown || isIgnored(dropdown)) return false;
+    record(dropdown, 'select', locatorOf(dropdown), accessibleName(option), option);
+    return true;
+  };
+
   listen('click', (event) => {
     const control = findControl(event);
     if (!control || isIgnored(control)) return;
+    if (control.getAttribute('role') === 'option' && pick(control)) return;
     const tag = control.tagName;
     // Fields and toggles are recorded when their value changes, not when clicked.
     if (tag === 'SELECT' || tag === 'TEXTAREA') return;
@@ -93,6 +128,16 @@ export function createRecorder(options: RecorderOptions): Recorder {
     const editable = control.getAttribute('contenteditable');
     if (editable !== null && editable !== 'false') return;
     record(control, 'click', locatorOf(control));
+  });
+
+  // Enter on a dropdown picks the option it has highlighted.
+  listen('keydown', (event) => {
+    if (event.key !== 'Enter' || event.isComposing) return;
+    const field = event.target as Element | null;
+    const active = field?.getAttribute?.('aria-activedescendant');
+    if (!field || field.getAttribute('role') !== 'combobox' || !active) return;
+    const option = document.getElementById(active);
+    if (option?.getAttribute('role') === 'option') pick(option);
   });
 
   listen('change', (event) => {

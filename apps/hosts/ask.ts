@@ -255,9 +255,12 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
           did = `pick "${target.label}"${value ? ` = ${value}` : ''}`;
           await target.handle.click();
           if (value) {
+            // Filter the list, then click the option, as a person would.
             await page.keyboard.type(value);
             await page.waitForTimeout(500);
-            await page.keyboard.press('Enter');
+            const option = page.getByRole('option', { name: value, exact: true }).first();
+            if (await option.isVisible().catch(() => false)) await option.click();
+            else await page.keyboard.press('Enter');
           }
         } else if (field) {
           did = `type "${target.label}" = ${value ?? 'test'}`;
