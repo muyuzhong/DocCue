@@ -30,7 +30,7 @@
 
 - 文档检索只是关键词匹配，没有同义词和词形变化。
 
-**第三轮：接真实应用**（进行中，见 `architecture_design.md` 第十三节）。先接 Grafana OSS：不改它的代码，用注入代理把 bridge 加到它的页面上，用真实模型提问、脚本扮演用户。
+**第三轮：接真实应用**（进行中，见 `architecture_design.md` 第十三节）。不改应用的代码，用注入代理把 bridge 加到它的页面上，用真实模型提问、脚本扮演用户。已接 Grafana OSS 和 Homebox。
 
 ## 代码在哪
 
@@ -75,9 +75,12 @@ apps/
   hosts/                  接真实应用（不是为 DocCue 写的）：
     proxy.ts              注入代理：给应用的每个 HTML 页面加上 bridge（从 dist 打包，像宿主自己的构建那样），/doccue 挂接口，其余原样转发（含 WebSocket）；只监听 127.0.0.1
     inject.ts             宿主前端要加的那几行：createBridge + mount
-    grafana/              Grafana OSS：下载发布包（校验 SHA-256，放在 .cache/）、匿名管理员、预置数据源和自动刷新的仪表盘
+    host.ts               每个应用要提供的东西（启动、要看的界面、要问的场景），以及下载（curl，可断点续传，校验 SHA-256）
+    grafana/              Grafana OSS：下载发布包（放在 .cache/）、匿名管理员、预置数据源和自动刷新的仪表盘；app.ts 是界面和场景
+    homebox/              Homebox：下载发布包、全新的 SQLite、注册并登录一个用户、预置几件物品；DocCue 拿到它仓库里面向用户的文档（同版本，运行时下载）
+    serve.ts              某个应用 + DocCue，手动试
     look.ts               不调模型：在几个典型界面上导出 agent 看到的快照，统计无名控件、被上限裁掉的节点、够不着的内容
-    ask.ts                调真实模型：脚本扮演用户提问并跟着引导走，报告第一步指向、每一步、是否达成、模型耗时和 token
+    ask.ts                调真实模型：脚本扮演用户提问并跟着引导走（包括在日历里点日子），报告第一步指向、每一步、是否达成、回答里该说和不该说的话、模型耗时和 token
 ```
 
 依赖方向：`bridge` 和 `core` 都只依赖 `protocol`，互不依赖。`core` 内部从里到外是 model → loop → render → agent → server，里层不知道外层。
@@ -106,6 +109,6 @@ apps/
 - `pnpm playground`：演示页面。
 - `pnpm --filter @doccue/playground e2e`：本机 Chrome 自动操作演示页面并提问，跟着引导走，打印模型看到的内容和回答。
 - `pnpm replay <日志> [编号]`：把日志里的一次模型调用原样重发。
-- `pnpm --filter @doccue/hosts grafana`：Grafana + DocCue，手动试（http://localhost:5180）。第一次会下载约 500 MB 的 Grafana 发布包。
-- `pnpm --filter @doccue/hosts look [界面名片段]`：Grafana 上 agent 看到了什么，不调模型。
-- `pnpm --filter @doccue/hosts ask [场景名片段]`：Grafana 上的真实模型场景，每个场景一个新的 Grafana。不在 `pnpm test` 里（要下载 Grafana）。
+- `pnpm --filter @doccue/hosts serve <grafana|homebox>`：真实应用 + DocCue，手动试（http://localhost:5180）。`LANG_UI=en-US` 换界面语言，`DOCS=off` 不给文档。第一次会下载发布包（Grafana 约 500 MB，Homebox 约 40 MB）。`grafana`、`homebox` 两个脚本是它的简写。
+- `pnpm --filter @doccue/hosts look <应用> [界面名片段]`：agent 在这个应用上看到了什么，不调模型。
+- `pnpm --filter @doccue/hosts ask <应用> [场景名片段]`：真实模型场景，每个场景一个新的应用实例。`DOCS=off` 不给文档，用来对比文档起了多大作用。不在 `pnpm test` 里（要下载应用）。

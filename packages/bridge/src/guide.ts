@@ -67,7 +67,7 @@ button.next { border-color: var(--accent); background: var(--accent); color: #ff
 const GAP = 10;
 const PAD = 4;
 
-type Side = 'below' | 'right' | 'above' | 'left';
+export type Side = 'below' | 'right' | 'above' | 'left';
 /** In this order when nothing else decides. */
 const SIDES: Side[] = ['below', 'right', 'above', 'left'];
 const MARGIN = 8;
@@ -105,6 +105,20 @@ function position(rect: DOMRect, size: { width: number; height: number }, side: 
   }
 }
 
+/**
+ * Where the bubble goes: on its side of the target, kept on screen. A target taller or wider than
+ * the window leaves no side where the bubble fits; it then covers part of the target rather than
+ * sitting off screen, where its buttons can't be reached.
+ */
+export function bubbleAt(rect: DOMRect, size: { width: number; height: number }, side: Side, screen: { width: number; height: number }): { top: number; left: number; fits: boolean } {
+  const at = position(rect, size, side, screen);
+  return {
+    top: clamp(at.top, MARGIN, Math.max(MARGIN, screen.height - size.height - MARGIN)),
+    left: clamp(at.left, MARGIN, Math.max(MARGIN, screen.width - size.width - MARGIN)),
+    fits: at.fits,
+  };
+}
+
 function overlap(a: Box, b: DOMRect): number {
   const width = Math.min(a.left + a.width, b.right) - Math.max(a.left, b.left);
   const height = Math.min(a.top + a.height, b.bottom) - Math.max(a.top, b.top);
@@ -126,6 +140,34 @@ export function faceOf(element: Element): Element {
   if (!sliver && !transparent) return element;
   const label = (element as HTMLInputElement).labels?.[0] ?? element.closest('label');
   return label && isVisible(label) ? label : element;
+}
+
+/**
+ * What an expanded control has opened and shows: the list, menu or dialog it names in
+ * `aria-controls` or `aria-owns`, else the one list or menu showing on the page. The user picks
+ * from it next, so the spotlight takes it in and the bubble keeps off it.
+ */
+export function popupOf(element: Element): Element | undefined {
+  const control = element.getAttribute('aria-expanded') === 'true' ? element : element.querySelector('[aria-expanded="true"]');
+  if (!control) return undefined;
+  const document = element.ownerDocument;
+  const usable = (popup: Element | null): popup is Element => !!popup && !popup.contains(element) && !isIgnored(popup) && isVisible(popup);
+  const ids = `${control.getAttribute('aria-controls') ?? ''} ${control.getAttribute('aria-owns') ?? ''}`.split(/\s+/).filter(Boolean);
+  for (const id of ids) {
+    const popup = document.getElementById(id);
+    if (usable(popup)) return popup;
+  }
+  const shown = Array.from(document.querySelectorAll('[role="listbox"], [role="menu"]')).filter(usable);
+  return shown.length === 1 ? shown[0] : undefined;
+}
+
+/** The smallest box around both. */
+function union(a: DOMRect, b: DOMRect): DOMRect {
+  const left = Math.min(a.left, b.left);
+  const top = Math.min(a.top, b.top);
+  const right = Math.max(a.right, b.right);
+  const bottom = Math.max(a.bottom, b.bottom);
+  return { left, top, right, bottom, x: left, y: top, width: right - left, height: bottom - top, toJSON: () => ({}) };
 }
 
 /** Where DocCue's own chat panel is: the bubble must not go under it, or its buttons can't be clicked. */
@@ -210,7 +252,7 @@ export function runGuide(options: GuideOptions): RunningGuide {
   // A step on something that is no control and holds none (a heading, a card, a chart): the
   // recorder never sees a click there, so a click on it is what completes the step.
   const clickedOn = (event: Event) => {
-    if (ended || !current || steps[index]!.expect === 'ack') return;
+    if (ended || !current) return;
     if (isInteractive(current) || hasControlInside(current) || !event.composedPath().includes(current)) return;
     advance();
   };
@@ -240,27 +282,30 @@ export function runGuide(options: GuideOptions): RunningGuide {
 
   /** Where the bubble goes for this step; chosen when the step shows, and again when the window or the chat panel changes. */
   let side: Side | undefined;
-  /** The chat panel's area when `side` was chosen. */
+  /** The chat panel's area, and whether the target had a list open, when `side` was chosen. */
   let chosenWith = '';
 
   function place(target: Element): void {
-    const rect = faceOf(target).getBoundingClientRect();
+    const popup = popupOf(target);
+    const face = faceOf(target).getBoundingClientRect();
+    const rect = popup ? union(face, popup.getBoundingClientRect()) : face;
     spot.style.left = `${rect.left - PAD}px`;
     spot.style.top = `${rect.top - PAD}px`;
     spot.style.width = `${rect.width + PAD * 2}px`;
     spot.style.height = `${rect.height + PAD * 2}px`;
     const size = bubble.getBoundingClientRect();
     const screen = { width: view.innerWidth, height: view.innerHeight };
-    let spotAt = side && position(rect, size, side, screen);
-    // Scrolled so that it no longer fits, or the chat panel opened, folded or closed: choose again.
-    const panelNow = panelKey(document);
-    if (!spotAt?.fits || panelNow !== chosenWith) {
+    // Scrolled so that it no longer fits, the chat panel opened, folded or closed, or the target
+    // opened or closed its list: choose again.
+    const panelNow = `${panelKey(document)}|${popup ? 'popup' : ''}`;
+    let chosen = side;
+    if (!chosen || !position(rect, size, chosen, screen).fits || panelNow !== chosenWith) {
       chosenWith = panelNow;
-      side = chooseSide(target, rect, size, screen);
-      spotAt = position(rect, size, side, screen);
+      chosen = side = chooseSide(target, rect, size, screen);
     }
-    bubble.style.top = `${spotAt.top}px`;
-    bubble.style.left = `${spotAt.left}px`;
+    const at = bubbleAt(rect, size, chosen, screen);
+    bubble.style.top = `${at.top}px`;
+    bubble.style.left = `${at.left}px`;
   }
 
   /** Shows the current step if its element is there, and keeps the overlay on it. */
@@ -309,8 +354,10 @@ export function runGuide(options: GuideOptions): RunningGuide {
     action(element) {
       if (ended) return;
       // The current step, or a later one the user got to first: the steps in between count as skipped.
+      // A step that only explains waits for Next, but acting on its own element is done with it too:
+      // models mark steps like "turn on Advanced" that way.
       for (let at = index; at < steps.length; at++) {
-        if (steps[at]!.expect === 'ack') continue;
+        if (steps[at]!.expect === 'ack' && at !== index) continue;
         const target = at === index ? current : options.find(at);
         if (!target || (target !== element && !target.contains(element))) continue;
         for (let passed = index; passed < at; passed++) if (steps[passed]!.expect !== 'ack') skipped.push(passed + 1);

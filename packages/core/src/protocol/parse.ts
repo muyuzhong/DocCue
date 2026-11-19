@@ -89,6 +89,7 @@ function checkLocator(value: unknown, path: string, errors: Errors): void {
   if (!object(value, path, errors)) return;
   field(value, 'role', 'string', path, errors);
   field(value, 'name', 'string', path, errors);
+  field(value, 'icon', 'string', path, errors, true);
   field(value, 'id', 'string', path, errors, true);
   const region = (item: unknown, at: string) => {
     if (!object(item, at, errors)) return;
@@ -105,6 +106,7 @@ function checkNode(value: unknown, path: string, errors: Errors, depth: number):
   field(value, 'ref', 'number', path, errors, true);
   field(value, 'name', 'string', path, errors, true);
   field(value, 'value', 'string', path, errors, true);
+  field(value, 'icon', 'string', path, errors, true);
   list(value, 'states', path, errors, each('string', errors), true);
   list(value, 'children', path, errors, (child, at) => checkNode(child, at, errors, depth + 1), true);
   field(value, 'more', 'number', path, errors, true);

@@ -11,7 +11,7 @@ import { ModelError } from '../model/errors.js';
 import { emptyUsage, type ModelAdapter } from '../model/types.js';
 import { docsPrompt, docsTools, type DocsProvider } from '../docs/docs.js';
 import { buildSystemPrompt, renderConversation } from '../render/render.js';
-import { GUIDE_TOOL, guideTool, latestScreen, readSteps } from './guide.js';
+import { GUIDE_TOOL, guideTool, latestQuestion, latestScreen, readSteps } from './guide.js';
 
 export interface AgentOptions {
   model: ModelAdapter;
@@ -42,7 +42,7 @@ export async function* respond(request: TurnRequest, options: AgentOptions, sign
       model,
       system: buildSystemPrompt(options.instructions, options.docs ? [docsPrompt(options.docs)] : []),
       messages: renderConversation(request),
-      tools: [...(options.docs ? docsTools(options.docs) : []), ...(options.tools ?? []), guideTool(latestScreen(request.conversation))],
+      tools: [...(options.docs ? docsTools(options.docs) : []), ...(options.tools ?? []), guideTool(latestScreen(request.conversation), { question: latestQuestion(request.conversation), locale: request.locale })],
       ...(options.maxSteps === undefined ? {} : { maxSteps: options.maxSteps }),
       ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
       ...(signal ? { signal } : {}),

@@ -40,7 +40,7 @@ const unfence = (text: string) => text.replace(/<(\/?context)/gi, '‹$1');
 
 /** `button "删除" in row "mysql-prod" in dialog "确认"`. */
 export function renderLocator(locator: Locator): string {
-  const parts = [locator.name ? `${locator.role} ${quote(locator.name)}` : locator.role];
+  const parts = [locator.name ? `${locator.role} ${quote(locator.name)}` : locator.icon ? `${locator.role} (${locator.icon} icon)` : locator.role];
   for (const region of [...(locator.within ?? [])].reverse()) parts.push(`${region.kind} ${quote(region.name)}`);
   return parts.join(' in ');
 }
@@ -99,7 +99,8 @@ function renderNode(node: ScreenNode, depth: number, lines: string[]): void {
   let line = `${'  '.repeat(depth)}${node.ref === undefined ? '' : `[${node.ref}] `}${node.role}`;
   if (node.name) line += ` ${quote(node.name)}`;
   if (node.value !== undefined) line += ` = ${quote(node.value)}`;
-  if (node.states && node.states.length > 0) line += ` (${node.states.join(', ')})`;
+  const notes = [...(node.icon ? [`${node.icon} icon`] : []), ...(node.states ?? [])];
+  if (notes.length > 0) line += ` (${notes.join(', ')})`;
   lines.push(line);
   for (const child of node.children ?? []) renderNode(child, depth + 1, lines);
   if (node.more) lines.push(`${'  '.repeat(depth + 1)}... ${node.more} more not shown`);
@@ -169,6 +170,22 @@ function scriptCounts(text: string): Map<string, number> {
  * (Haiku 5.5 answered in Chinese, 3 times in 3). Mixed text ("Prometheus datasource 怎么加？",
  * "How do I click 连接?") gets no line: the model judges it.
  */
+/**
+ * Whether a text the model wrote is mostly in the locale's scripts, leaving out what it quotes
+ * («», 「」, “”, "", ``): a step in Chinese on a Chinese screen, whatever names it quotes.
+ */
+export function mostlyInLocale(text: string, locale: string): boolean {
+  const expected = LOCALE_SCRIPTS[locale.toLowerCase().split(/[-_]/)[0]!] ?? ['latin'];
+  const own = text.replace(/「[^」]*」|『[^』]*』|“[^”]*”|‘[^’]*’|«[^»]*»|"[^"]*"|`[^`]*`/g, ' ');
+  let inLocale = 0;
+  let other = 0;
+  for (const [script, count] of scriptCounts(own)) {
+    if (expected.includes(script)) inLocale += count;
+    else other += count;
+  }
+  return inLocale > other;
+}
+
 export function otherLanguage(text: string, locale: string | undefined): boolean {
   if (!locale) return false;
   const expected = LOCALE_SCRIPTS[locale.toLowerCase().split(/[-_]/)[0]!] ?? ['latin'];
@@ -201,7 +218,7 @@ export function renderConversation({ conversation, locale, user }: RenderInput):
       const lines: string[] = [];
       if (first && user && Object.keys(user).length > 0) lines.push(`user: ${renderUser(user)}`);
       lines.push(...renderPerception(item.perception));
-      if (isLocale(locale) && otherLanguage(item.text, locale)) lines.push(`the message below is not in the locale's language: write in the language of the message`);
+      if (isLocale(locale) && otherLanguage(item.text, locale)) lines.push(`the message below is not in the locale's language: write your reply and the guide's steps in the language of the message`);
       const open = first && isLocale(locale) ? `<context locale="${locale}">` : '<context>';
       messages.push({ role: 'user', content: [open, unfence(lines.join('\n')), '</context>', unfence(item.text)].join('\n') });
       first = false;

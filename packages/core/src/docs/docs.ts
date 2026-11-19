@@ -58,9 +58,26 @@ interface Section {
   full: string;
 }
 
+/**
+ * What a docs site's source has for the site, not the reader: YAML front matter (`---` lines at
+ * the top), whose `title` names the file, and an MDX file's `import` lines.
+ */
+function forReaders(file: DocFile): { file: DocFile; title?: string } {
+  let content = file.content.replace(/\r\n?/g, '\n');
+  let title: string | undefined;
+  const front = /^---\n([\s\S]*?)\n---[ \t]*(?:\n|$)/.exec(content);
+  if (front) {
+    const line = /^title:[ \t]*(.+?)[ \t]*$/m.exec(front[1]!);
+    if (line) title = line[1]!.replace(/^(["'])(.*)\1$/, '$2');
+    content = content.slice(front[0].length);
+  }
+  if (/\.mdx$/i.test(file.path)) content = content.replace(/^import\s[^\n]*?\sfrom\s+['"][^'"\n]+['"];?[ \t]*\n/gm, '');
+  return { file: { path: file.path, content: content.replace(/^\n+/, '') }, ...(title ? { title } : {}) };
+}
+
 /** Splits Markdown into sections at its headings (headings in code blocks don't count). */
-function sections(file: DocFile): Section[] {
-  const lines = file.content.replace(/\r\n?/g, '\n').split('\n');
+function sections(file: DocFile, title?: string): Section[] {
+  const lines = file.content.split('\n');
   const heads: Array<{ line: number; level: number; title: string }> = [];
   let fenced = false;
   lines.forEach((line, index) => {
@@ -68,7 +85,7 @@ function sections(file: DocFile): Section[] {
     const match = fenced ? null : /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
     if (match) heads.push({ line: index, level: match[1]!.length, title: match[2]! });
   });
-  const name = file.path.replace(/\.(md|mdx|markdown)$/i, '').split('/').pop()!;
+  const name = title ?? file.path.replace(/\.(md|mdx|markdown)$/i, '').split('/').pop()!;
   // Text before the first heading belongs to the file itself.
   if (heads[0]?.line !== 0) heads.unshift({ line: 0, level: 0, title: name });
 
@@ -134,8 +151,9 @@ export function createDocs(files: readonly DocFile[], options: DocsOptions = {})
   // In path order, not the order the files were read in (which differs between machines): the
   // table of contents and the inlined text go into the system prompt and have to be the same
   // everywhere for the prompt cache to hit.
-  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path));
-  const all = sorted.flatMap(sections);
+  const prepared = files.map(forReaders).sort((a, b) => a.file.path.localeCompare(b.file.path));
+  const sorted = prepared.map((entry) => entry.file);
+  const all = prepared.flatMap((entry) => sections(entry.file, entry.title));
   const byId = new Map(all.map((section) => [section.id, section]));
   const indexed = all.map((section) => ({ section, title: terms(section.trail.join(' ')), body: terms(section.own) }));
   const fullText = sorted.map((file) => `<doc path="${file.path}">\n${file.content.trim()}\n</doc>`).join('\n\n');

@@ -22,6 +22,8 @@ export interface Locator {
   role: string;
   /** The name shown on screen, as is. Empty when the control has none. */
   name: string;
+  /** For a control with no name: what its icon is called in the page's code (`qrcode`, `trash`). Not text the user sees. */
+  icon?: string;
   /** Regions around the control, outermost first. */
   within?: Region[];
   /** The host's `data-cue-id`, when present. An identity, not a name. */
@@ -50,6 +52,8 @@ export interface ScreenNode {
   name?: string;
   /** Current value of a field, or the chosen option. Never present for passwords. */
   value?: string;
+  /** For a control with no name: what its icon is called in the page's code. Not text the user sees. */
+  icon?: string;
   /** `disabled`, `checked`, `invalid`, `expanded`, `collapsed`, `current`, `password`, `filled`. */
   states?: string[];
   children?: ScreenNode[];

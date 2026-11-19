@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBridge, type Bridge } from '../src/bridge.js';
 import { messagesFor } from '../src/messages.js';
 import { renderMarkdown } from '../src/panel/markdown.js';
-import type { Panel } from '../src/panel/panel.js';
+import { appendText, type Panel } from '../src/panel/panel.js';
 
 describe('renderMarkdown', () => {
   it('renders the little Markdown answers use', () => {
@@ -17,6 +17,15 @@ describe('renderMarkdown', () => {
     const html = renderMarkdown('<img src=x onerror="alert(1)"> **<script>alert(2)</script>** [link](javascript:alert(3))');
     expect(html).not.toMatch(/<img|<script|<a /);
     expect(html).toContain('&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
+  });
+});
+
+describe('appendText', () => {
+  it('starts a new paragraph after a tool call, and runs on otherwise', () => {
+    expect(appendText('我先查一下文档。', '在到期当天', true)).toBe('我先查一下文档。\n\n在到期当天');
+    expect(appendText('在到期', '当天', false)).toBe('在到期当天');
+    // Nothing written before the tool: nothing to break from.
+    expect(appendText('', '答案', true)).toBe('答案');
   });
 });
 

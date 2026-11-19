@@ -102,6 +102,19 @@ describe('createDocs', () => {
     expect(shuffled.inline?.()).toBe(sorted.inline?.());
   });
 
+  it("titles a file by its front matter and leaves out what is only for the docs site", async () => {
+    const page: DocFile = {
+      path: 'user-guide/items.mdx',
+      content: '---\ntitle: "Items"\nsidebar:\n  order: 2\n---\nimport { Steps } from "@astrojs/starlight/components";\n\nItems are what you track.\n\n## Adding an Item\n\n<Steps>\n1. Click "Create".\n</Steps>\n',
+    };
+    const docs = createDocs([page]);
+    expect(docs.toc().split('\n')).toEqual(['- Items (user-guide/items.mdx#Items)', '  - Adding an Item (user-guide/items.mdx#Adding an Item)']);
+    const text = await docs.read('user-guide/items.mdx#Items');
+    expect(text).toContain('Items are what you track.');
+    expect(text).not.toMatch(/sidebar|import \{/);
+    expect(docs.inline?.()).not.toContain('title:');
+  });
+
   it('goes into the system prompt whole when small, and through tools otherwise', () => {
     expect(docs.inline?.()).toContain('<doc path="datasource/new.md">');
     expect(docsPrompt(docs)).toContain('<docs>');

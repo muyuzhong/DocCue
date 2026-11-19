@@ -45,6 +45,6 @@ export function findByLocator(document: Document, locator: Locator): Element | u
   return Array.from(document.querySelectorAll(CANDIDATE_SELECTOR)).find((element) => {
     if (!isInteractive(element) || !usable(element)) return false;
     const found = locatorOf(element);
-    return found.role === locator.role && found.name === locator.name && JSON.stringify(found.within ?? []) === within;
+    return found.role === locator.role && found.name === locator.name && found.icon === locator.icon && JSON.stringify(found.within ?? []) === within;
   });
 }

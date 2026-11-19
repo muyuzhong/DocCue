@@ -7,7 +7,7 @@
 import type { Screen, ScreenNode } from '@doccue/protocol';
 import { clean, clip, isIgnored, isScreenReaderOnly, isVisible, textOf } from './dom.js';
 import { NOTICE_SELECTOR } from './errors.js';
-import { accessibleName, groupOf, hasControlInside, isInteractive, roleOf } from './naming.js';
+import { accessibleName, groupOf, hasControlInside, iconOf, isInteractive, roleOf } from './naming.js';
 
 /** Parts of a custom select that are not its choice: live announcements, the placeholder, a shortcut hint. */
 const NOT_A_CHOICE = '[aria-live], [role="log"], [role="status"], [role="alert"], [id*="placeholder" i], [class*="placeholder" i], kbd';
@@ -79,6 +79,10 @@ function controlNode(element: Element, choice?: string): ScreenNode {
   const node: ScreenNode = { role: roleOf(element) };
   const name = accessibleName(element);
   if (name) node.name = name;
+  else {
+    const icon = iconOf(element);
+    if (icon) node.icon = icon;
+  }
   const states: string[] = [];
   const tag = element.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') {
@@ -96,6 +100,10 @@ function controlNode(element: Element, choice?: string): ScreenNode {
     node.value = clip(chosen.filter(Boolean).join(', '), 100);
   } else if (element.getAttribute('aria-checked') === 'true') {
     states.push('checked');
+  } else if (node.role === 'combobox') {
+    // A dropdown built from a button, named by its label: the text it shows is the chosen option.
+    const shown = textOf(element);
+    if (shown && shown !== name) node.value = clip(shown, 100);
   }
   if ((element as HTMLButtonElement).disabled || element.getAttribute('aria-disabled') === 'true') states.push('disabled');
   if (element.getAttribute('aria-selected') === 'true' || element.hasAttribute('aria-current')) states.push('current');

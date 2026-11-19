@@ -35,6 +35,12 @@ const perception: Perception = {
 };
 
 describe('renderScreen', () => {
+  it("notes a nameless control's icon, apart from its name", () => {
+    const screen = { page: { path: '/item/1' }, nodes: [{ ref: 1, role: 'button', icon: 'qrcode' }, { ref: 2, role: 'button', icon: 'trash', states: ['disabled'] }] };
+    expect(renderScreen(screen).split('\n').slice(1)).toEqual(['[1] button (qrcode icon)', '[2] button (trash icon, disabled)']);
+    expect(renderLocator({ role: 'button', name: '', icon: 'qrcode' })).toBe('button (qrcode icon)');
+  });
+
   it('prints the tree with numbers, values and states', () => {
     expect(renderScreen(perception.screen).split('\n')).toEqual([
       'page "新建数据源" /datasource/new',
@@ -196,3 +202,19 @@ describe('readSteps', () => {
     expect(readSteps({ steps: [{ target: '9', text: 'x' }] })).toEqual({ problem: 'steps[0].target: expected the number of an element, like 3' });
   });
 });
+
+describe('guide steps in the language of the question', () => {
+  it('sends back steps in the screen language when the user wrote in another one', async () => {
+    const { guideTool } = await import('../src/agent/guide.js');
+    const screen = { page: { path: '/home' }, nodes: [{ ref: 3, role: 'button', name: '创建' }] };
+    const tool = guideTool(screen, { question: 'How do I add a new location?', locale: 'zh-CN' });
+    expect(tool.validate!({ steps: [{ target: 3, text: '点击左上角的「创建」按钮，然后选择「位置」。' }] })).toMatch(/^steps\[0\]\.text is in the screen's language/);
+    // English with the screen's words quoted, or written out.
+    expect(tool.validate!({ steps: [{ target: 3, text: 'Click 「创建」, then pick 「位置」.' }] })).toBeUndefined();
+    expect(tool.validate!({ steps: [{ target: 3, text: 'Click 创建 at the top left.' }] })).toBeUndefined();
+    // A question in the screen's language: any steps go.
+    expect(guideTool(screen, { question: '怎么新建位置？', locale: 'zh-CN' }).validate!({ steps: [{ target: 3, text: '点「创建」' }] })).toBeUndefined();
+    expect(guideTool(screen).validate!({ steps: [{ target: 3, text: '点「创建」' }] })).toBeUndefined();
+  });
+});
+

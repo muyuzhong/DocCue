@@ -269,11 +269,17 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
     add({ role: 'error', text: failure.status === 400 || failure.status === 413 ? t.failedConversation : t.failed });
   };
 
+  /** A tool ran since the last text: what the model writes next is a new paragraph. */
+  let newPart = false;
   const handlers: { [K in BridgeEvent['type']]?: (event: Extract<BridgeEvent, { type: K }>) => void } = {
-    status: (event) => showStatus(event.state === 'tool' ? (DOC_TOOLS.has(event.tool ?? '') ? t.readingDocs : t.working) : t.thinking),
+    status: (event) => {
+      if (event.state === 'tool') newPart = true;
+      showStatus(event.state === 'tool' ? (DOC_TOOLS.has(event.tool ?? '') ? t.readingDocs : t.working) : t.thinking);
+    },
     text: (event) => {
       const current = bubble();
-      current.text += event.delta;
+      current.text = appendText(current.text, event.delta, newPart);
+      newPart = false;
       current.element.innerHTML = renderMarkdown(current.text);
       scroll();
     },
@@ -380,4 +386,12 @@ export function mountPanel(bridge: Bridge, options: PanelOptions = {}): Panel {
       host.remove();
     },
   };
+}
+
+/**
+ * An answer's text with the next piece added. What the model writes after a tool call (it says
+ * "let me check the docs", searches, then answers) starts a new paragraph instead of running on.
+ */
+export function appendText(text: string, delta: string, newPart: boolean): string {
+  return newPart && text.trim() ? `${text.trimEnd()}\n\n${delta.trimStart()}` : text + delta;
 }

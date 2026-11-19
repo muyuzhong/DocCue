@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { runGuide, type RunningGuide } from '../src/guide.js';
+import { bubbleAt, popupOf, runGuide, type RunningGuide } from '../src/guide.js';
 import { describeElement, findByLocator } from '../src/locate.js';
 import { messagesFor } from '../src/messages.js';
 
@@ -113,12 +113,24 @@ describe('runGuide', () => {
       { selector: 'h1', text: '这里是新建页面', expect: 'ack' },
       { selector: '#host', text: '填主机地址' },
     ]);
-    running.action($('h1'));
+    running.action($('#test')); // the element of no step
     expect(bubbleText()).toBe('这里是新建页面');
     overlay()!.querySelector<HTMLButtonElement>('.next')!.click();
     expect(bubbleText()).toBe('填主机地址');
     overlay()!.querySelector<HTMLButtonElement>('.exit')!.click();
     await expect(running.done).resolves.toEqual({ outcome: 'exited', completedSteps: 1 });
+  });
+
+  it('is done with a step that only explains when the user acts on its element anyway', async () => {
+    // A model marks "turn on Advanced" as a step to read: the switch is still the thing to use.
+    const running = start([
+      { selector: '#host', text: '打开「进阶」', expect: 'ack' },
+      { selector: '#test', text: '再测一次' },
+    ]);
+    running.action($('#host'));
+    expect(bubbleText()).toBe('再测一次');
+    running.action($('#test'));
+    await expect(running.done).resolves.toEqual({ outcome: 'completed', completedSteps: 2 });
   });
 
   it('jumps ahead when the user does a later step first, and counts the ones in between as skipped', async () => {
@@ -188,6 +200,36 @@ describe('runGuide', () => {
 });
 
 describe('findByLocator', () => {
+  it('keeps the bubble on screen when no side of a big target has room for it', () => {
+    const screen = { width: 1440, height: 900 };
+    const size = { width: 300, height: 120 };
+    // A form taller than the window: below it is off screen.
+    const tall = { left: 300, top: 60, right: 1100, bottom: 1400, width: 800, height: 1340, x: 300, y: 60, toJSON: () => ({}) };
+    expect(bubbleAt(tall, size, 'below', screen)).toEqual({ top: 900 - 120 - 8, left: 300, fits: false });
+    // Room below: where it always went.
+    const small = { left: 300, top: 60, right: 400, bottom: 90, width: 100, height: 30, x: 300, y: 60, toJSON: () => ({}) };
+    expect(bubbleAt(small, size, 'below', screen)).toEqual({ top: 100, left: 300, fits: true });
+  });
+
+  it('finds the list a dropdown opened, to light it up with the dropdown', () => {
+    document.body.innerHTML = `
+      <div id="tags"><input id="tag-input" role="combobox" aria-expanded="false" aria-controls="" /></div>
+      <div id="tag-list" role="listbox" hidden><div role="option">Important</div></div>
+      <button id="menu-button" aria-expanded="false">更多</button>
+      <div role="menu" hidden><div role="menuitem">删除</div></div>`;
+    expect(popupOf($('#tags'))).toBeUndefined();
+    // Opened: named by aria-controls, on the control or inside the step's element.
+    $('#tag-input').setAttribute('aria-expanded', 'true');
+    $('#tag-input').setAttribute('aria-controls', 'tag-list');
+    $('#tag-list').hidden = false;
+    expect(popupOf($('#tags'))).toBe($('#tag-list'));
+    // Named nowhere: the one list or menu showing.
+    $('#menu-button').setAttribute('aria-expanded', 'true');
+    expect(popupOf($('#menu-button'))).toBe($('#tag-list'));
+    $('[role="menu"]').hidden = false;
+    expect(popupOf($('#menu-button'))).toBeUndefined();
+  });
+
   it('finds a control again after the page re-rendered it', () => {
     const locator = describeElement($('#test'))!;
     expect(locator).toEqual({ role: 'button', name: '测试连接' });

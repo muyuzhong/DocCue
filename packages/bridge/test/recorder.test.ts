@@ -80,14 +80,20 @@ describe('createRecorder', () => {
     const ssl = $<HTMLInputElement>('#ssl');
     ssl.checked = true;
     change(ssl);
-    // Clicking into a field is not an action of its own.
+    // Clicking into a field is not an action of its own...
     host.click();
+    // ...unless it takes no typing, like a date picker's read-only input: the click is what opens it.
+    document.body.insertAdjacentHTML('beforeend', '<label for="due">预定日期</label><input id="due" readonly /><label for="done">完成日期</label><input id="done" inputmode="none" />');
+    $('#due').click();
+    $('#done').click();
     await sleep(50);
     expect(entries.map((entry) => entry.action)).toEqual([
       { type: 'input', target: { role: 'textbox', name: '主机地址' }, value: 'http://127.0.0.1:5432' },
       { type: 'input', target: { role: 'textbox', name: '密码' } },
       { type: 'select', target: { role: 'combobox', name: '类型' }, value: 'PostgreSQL' },
       { type: 'check', target: { role: 'checkbox', name: '使用 SSL' } },
+      { type: 'click', target: { role: 'textbox', name: '预定日期' } },
+      { type: 'click', target: { role: 'textbox', name: '完成日期' } },
     ]);
     expect(JSON.stringify(entries)).not.toContain('secret');
   });

@@ -122,9 +122,12 @@ export function createRecorder(options: RecorderOptions): Recorder {
     if (!control || isIgnored(control)) return;
     if (control.getAttribute('role') === 'option' && pick(control)) return;
     const tag = control.tagName;
-    // Fields and toggles are recorded when their value changes, not when clicked.
+    // Fields and toggles are recorded when their value changes, not when clicked. A field that
+    // takes no typing (read-only, or no keyboard: `inputmode="none"`) is different: clicking it
+    // (to open a date picker, say) is what the user does with it.
     if (tag === 'SELECT' || tag === 'TEXTAREA') return;
-    if (tag === 'INPUT' && NON_CLICK_INPUTS.has((control as HTMLInputElement).type)) return;
+    const typed = !(control as HTMLInputElement).readOnly && control.getAttribute('inputmode') !== 'none';
+    if (tag === 'INPUT' && NON_CLICK_INPUTS.has((control as HTMLInputElement).type) && typed) return;
     const editable = control.getAttribute('contenteditable');
     if (editable !== null && editable !== 'false') return;
     record(control, 'click', locatorOf(control));

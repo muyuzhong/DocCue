@@ -52,6 +52,84 @@ describe('naming', () => {
     expect(accessibleName($('#limit'))).toBe('限制 默认情况下显示的项目数量');
   });
 
+  it('names fields built from buttons, and fields whose label is tied to a wrapper, by their labels', () => {
+    // shadcn-vue / reka-ui markup: custom dropdowns, switches and checkboxes are <button>s.
+    document.body.innerHTML = `
+      <label for="parent">父位置</label><button id="parent" role="combobox"><span>Garage</span><span><button aria-label="清除"><svg></svg></button></span></button>
+      <label><button id="empty" role="switch" aria-checked="true"></button> 显示空值</label>
+      <label for="save">另存为</label><button id="save">保存</button>
+      <label for="name"><span>名称</span><span class="grow"></span><span>6/255 (最少 1)</span></label><input id="name" />
+      <label for="ratio">比例 1/2</label><input id="ratio" />
+      <div><label>预览</label><button id="preview" role="checkbox" aria-checked="false"></button></div>
+      <label for="desc-box"><span>说明</span><span>0/1000</span></label><div id="desc-box"><textarea id="desc"></textarea></div>
+      <label for="both">两个</label><div id="both"><input id="one" /><input id="two" /></div>
+      <div><label>完成日期</label><div class="dp__main"><div class="dp__input_wrap"><input id="done" readonly aria-label="Datepicker input" /><svg></svg></div></div></div>
+      <div><label>预定日期</label><div class="dp__main"><div class="dp__input_wrap"><input id="due" readonly aria-label="Datepicker input" /></div></div></div>
+      <label>筛选</label><div><input id="from" aria-label="开始" /><input id="to" aria-label="结束" /></div>`;
+    expect(['parent', 'empty', 'save', 'name', 'ratio', 'preview', 'desc', 'one', 'done', 'due', 'from'].map((id) => accessibleName($(`#${id}`)))).toEqual([
+      '父位置',
+      '显示空值',
+      // An action button keeps the words on it.
+      '保存',
+      // A character count changes as the user types: no part of the name.
+      '名称',
+      '比例 1/2',
+      // A label next to the control, tied to nothing.
+      '预览',
+      // Tied to the box around the field.
+      '说明',
+      // A box with more than one field: the label names none of them.
+      '',
+      // The label before a widget around the field beats the widget's own aria-label.
+      '完成日期',
+      '预定日期',
+      // ...but not a label before a box of several fields.
+      '开始',
+    ]);
+    const { screen } = buildScreen(document, { errorSelectors: [] });
+    // The dropdown's text is its value, not its name.
+    expect(screen.nodes[0]).toEqual({ ref: 1, role: 'combobox', name: '父位置', value: 'Garage' });
+  });
+
+  it('takes the days of a date picker for controls, and leaves the cells of a data grid as text', () => {
+    document.body.innerHTML = `
+      <div role="grid">
+        <div role="row"><div role="gridcell">Mo</div><div role="gridcell">Tu</div></div>
+        <div role="row"><div id="oct-31" role="gridcell" tabindex="0"><div class="dp__cell_offset">31</div></div><div id="nov-1" role="gridcell" tabindex="0" aria-selected="true"><div>1</div></div></div>
+      </div>
+      <div role="grid" aria-label="订单">
+        <div role="row"><div id="cell" role="gridcell" tabindex="-1">mysql-prod</div><div role="gridcell" tabindex="-1">MySQL</div></div>
+      </div>`;
+    expect(['oct-31', 'nov-1', 'cell'].map((id) => isInteractive($(`#${id}`)))).toEqual([true, true, false]);
+    expect(locatorOf($('#nov-1'))).toEqual({ role: 'gridcell', name: '1' });
+    const { screen } = buildScreen(document, { errorSelectors: [] });
+    expect(JSON.stringify(screen.nodes)).toContain('{"ref":5,"role":"gridcell","name":"1","states":["current"]}');
+    expect(JSON.stringify(screen.nodes)).toContain('{"role":"text","name":"mysql-prod"}');
+  });
+
+  it('describes a control with no name by its icon', () => {
+    document.body.innerHTML = `
+      <button id="lucide"><svg class="lucide size-4 lucide-trash-2-icon lucide-trash-2"></svg></button>
+      <button id="iconify"><svg name="mdi-qrcode" viewBox="0 0 24 24"><path d="M0 0"></path></svg></button>
+      <button id="fa"><i class="fa-solid fa-pen-to-square"></i></button>
+      <button id="fa-svg"><svg data-icon="circle-xmark"></svg></button>
+      <button id="sprite"><svg><use href="/sprite.svg#icon-download"></use></svg></button>
+      <button id="plain"><svg class="h-4 w-4"><path d="M0 0"></path></svg></button>
+      <button id="named" aria-label="关闭"><svg class="lucide-x"></svg></button>`;
+    expect(['lucide', 'iconify', 'fa', 'fa-svg', 'sprite', 'plain', 'named'].map((id) => locatorOf($(`#${id}`)))).toEqual([
+      { role: 'button', name: '', icon: 'trash 2' },
+      { role: 'button', name: '', icon: 'qrcode' },
+      { role: 'button', name: '', icon: 'pen to square' },
+      { role: 'button', name: '', icon: 'circle xmark' },
+      { role: 'button', name: '', icon: 'download' },
+      { role: 'button', name: '' },
+      // A name makes the icon unneeded.
+      { role: 'button', name: '关闭' },
+    ]);
+    const { screen } = buildScreen(document, { errorSelectors: [] });
+    expect(screen.nodes[0]).toEqual({ ref: 1, role: 'button', icon: 'trash 2' });
+  });
+
   it('adds the dialog, and the row or section when a name is not unique', () => {
     document.body.innerHTML = `
       <table><tbody>
