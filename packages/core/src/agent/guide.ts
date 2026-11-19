@@ -58,6 +58,72 @@ export function readSteps(args: unknown): { steps: GuideStep[] } | { problem: st
   return { steps: steps as GuideStep[] };
 }
 
+/** Text of a node and everything under it. */
+function textsOf(node: ScreenNode, out: string[] = []): string[] {
+  if (node.name) out.push(node.name);
+  if (node.value) out.push(node.value);
+  for (const child of node.children ?? []) textsOf(child, out);
+  return out;
+}
+
+interface Row {
+  texts: string[];
+  refs: Set<number>;
+  /** The names of the numbered controls in it, by number. */
+  names: Map<number, string>;
+}
+
+/** Numbered nodes under these nodes, with their names. */
+function namesOf(nodes: readonly ScreenNode[], out = new Map<number, string>()): Map<number, string> {
+  for (const node of nodes) {
+    if (node.ref !== undefined && node.name) out.set(node.ref, node.name);
+    if (node.children) namesOf(node.children, out);
+  }
+  return out;
+}
+
+/** What a step's text quotes: 「保存」, “保存”, "Save". */
+const quoted = (text: string) => Array.from(text.matchAll(/「([^」]+)」|“([^”]+)”|"([^"]+)"/g), (match) => match[1] ?? match[2] ?? match[3]!);
+
+/** The rows of the screen's tables, each with its texts and the numbers of what is in it. */
+function rowsOf(nodes: readonly ScreenNode[], out: Row[] = []): Row[] {
+  for (const node of nodes) {
+    if (node.role === 'row') out.push({ texts: textsOf(node).filter((text) => text.length >= 3), refs: refsOf(node.children ?? []), names: namesOf(node.children ?? []) });
+    else if (node.children) rowsOf(node.children, out);
+  }
+  return out;
+}
+
+/**
+ * A step whose text names another row than the one its target is in: the text mentions what only
+ * that other row has ("ds-38") and nothing only the target's row has. Models sometimes take the
+ * number of the button one row up; on a "delete" step that deletes the wrong thing. Returns the
+ * target's row and the row the text names.
+ */
+function wrongRow(step: GuideStep, rows: readonly Row[]): { target: Row; named: Row } | undefined {
+  const target = rows.find((row) => row.refs.has(step.target as number));
+  if (!target) return undefined;
+  const count = new Map<string, number>();
+  for (const row of rows) for (const text of new Set(row.texts)) count.set(text, (count.get(text) ?? 0) + 1);
+  const own = (row: Row) => row.texts.filter((text) => count.get(text) === 1 && step.text.includes(text));
+  if (own(target).length > 0) return undefined;
+  const named = rows.find((row) => row !== target && own(row).length > 0);
+  return named && { target, named };
+}
+
+/**
+ * A step on one control of a row whose text quotes another control of the same row (the target
+ * is "编辑", the text says to click 「删除」) and not the target's own name.
+ */
+function wrongControl(step: GuideStep, rows: readonly Row[]): { target: string; named: string } | undefined {
+  const row = rows.find((candidate) => candidate.refs.has(step.target as number));
+  const target = row?.names.get(step.target as number);
+  if (!row || !target || step.text.includes(target)) return undefined;
+  const others = new Set([...row.names.values()].filter((name) => name !== target));
+  const named = quoted(step.text).find((quote) => others.has(quote));
+  return named ? { target, named } : undefined;
+}
+
 /** The user's latest message, the language the steps must be in. */
 export function latestQuestion(conversation: readonly Item[]): string | undefined {
   for (let i = conversation.length - 1; i >= 0; i--) {
@@ -74,6 +140,7 @@ export function latestQuestion(conversation: readonly Item[]): string | undefine
  */
 export function guideTool(screen: Screen | undefined, language: { question?: string; locale?: string } = {}): Tool {
   const { question, locale } = language;
+  const rows = rowsOf(screen?.nodes ?? []);
   const foreign = question !== undefined && isLocale(locale) && otherLanguage(question, locale) ? locale : undefined;
   const refs = refsOf(screen?.nodes ?? []);
   return {
@@ -103,6 +170,12 @@ export function guideTool(screen: Screen | undefined, language: { question?: str
       if ('problem' in read) return read.problem;
       const missing = read.steps.findIndex((step) => !refs.has(step.target as number));
       if (missing >= 0) return `steps[${missing}].target: there is no element [${String(read.steps[missing]!.target)}] on the latest screen`;
+      for (const [index, step] of read.steps.entries()) {
+        const mismatch = wrongRow(step, rows);
+        if (mismatch) return `steps[${index}].target: [${String(step.target)}] is in the row of "${mismatch.target.texts[0] ?? ''}", but the text is about the row of "${mismatch.named.texts[0] ?? ''}": point at the element in the row the text means`;
+        const other = wrongControl(step, rows);
+        if (other) return `steps[${index}].target: [${String(step.target)}] is "${other.target}", but the text says "${other.named}": point at "${other.named}" in the same row`;
+      }
       const wrong = foreign ? read.steps.findIndex((step) => mostlyInLocale(step.text, foreign)) : -1;
       if (wrong >= 0) return `steps[${wrong}].text is in the screen's language, but the user wrote in another one: write every step in the language of the user's latest message, quoting the screen's words as they appear`;
       return undefined;

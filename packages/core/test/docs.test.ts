@@ -91,6 +91,12 @@ describe('createDocs', () => {
     expect(text).not.toContain('测试连接');
     expect(await docs.read('datasource/new.md#测试连接')).toContain('# 这一行在代码块里，不是标题');
     expect(await docs.read('nope.md#x')).toBeUndefined();
+    // A file's path, as models send it: the whole file.
+    const whole = await docs.read('datasource/new.md');
+    expect(whole).toContain('## 端口');
+    expect(whole).toContain('测试连接');
+    expect(await docs.read('./datasource/new.md')).toBe(whole);
+    expect(await docs.read('nope.md')).toBeUndefined();
   });
 
   it('lists a short file without headings, and gives the same prompt whatever order the files come in', () => {

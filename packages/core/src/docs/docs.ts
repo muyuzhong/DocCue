@@ -213,9 +213,10 @@ export function createDocs(files: readonly DocFile[], options: DocsOptions = {})
     },
 
     async read(id) {
-      const section = byId.get(id);
+      // A file's path for an ID (models do that): its first section, which runs to the end of the file.
+      const section = byId.get(id) ?? (id.includes('#') ? undefined : all.find((candidate) => candidate.id.startsWith(`${id.replace(/^\.?\//, '')}#`)));
       if (!section) return undefined;
-      const from = id.slice(0, id.indexOf('#'));
+      const from = section.id.slice(0, section.id.indexOf('#'));
       // Links to other docs become IDs the model can read next; links elsewhere stay as they are.
       const text = section.full.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (link, label: string, href: string) => {
         const target = linkTarget(href, from);

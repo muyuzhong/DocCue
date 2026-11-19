@@ -48,21 +48,30 @@ describe('runTurn with the real model', () => {
     expect(text).toMatch(/pineapple/i);
   });
 
-  it('sends rejected arguments and tool failures back as results the model can read', async () => {
-    const lookup: Tool = {
-      name: 'lookup_order',
-      description: 'Looks up an order by its ID.',
-      parameters: { type: 'object', properties: { order_id: { type: 'string' } }, required: ['order_id'] },
-      // The user gives a bare number, so the first call is rejected and the error says what to send.
-      validate: (args) => (/^ORD-\d+$/.test(String((args as { order_id?: unknown }).order_id)) ? undefined : 'order_id: must look like ORD-123'),
-      async execute() {
-        throw new Error('the order database is offline');
-      },
-    };
-    const events = await collect(runTurn({ model: realModel(), messages: [user('Look up my order 42 with lookup_order and tell me what happened.')], tools: [lookup] }));
+  /** Looks up orders whose IDs are six digits; the database behind it is offline. */
+  const lookupOrder = (): Tool => ({
+    name: 'lookup_order',
+    description: 'Looks up an order by its ID.',
+    parameters: { type: 'object', properties: { order_id: { type: 'string' } }, required: ['order_id'] },
+    validate: (args) => (/^\d{6}$/.test(String((args as { order_id?: unknown }).order_id)) ? undefined : 'order_id: must be six digits, zero-padded, like 000123'),
+    async execute() {
+      throw new Error('the order database is offline');
+    },
+  });
+
+  // What the model does after a rejection (retry, or ask the user) is its own call: the loop's
+  // part is to send the rejection back as a result and let the model go on.
+  it('sends rejected arguments back as a result the model can read', async () => {
+    const events = await collect(runTurn({ model: realModel(), messages: [user('Look up my order 42 with lookup_order.')], tools: [lookupOrder()] }));
     const contents = results(events).map((result) => [result.isError, result.content]);
-    expect(contents[0]).toEqual([true, 'Invalid arguments for lookup_order: order_id: must look like ORD-123']);
-    expect(contents).toContainEqual([true, 'Tool error: the order database is offline']);
+    expect(contents[0]).toEqual([true, 'Invalid arguments for lookup_order: order_id: must be six digits, zero-padded, like 000123']);
+    expect(events.filter((event) => event.type === 'step_start').length).toBeGreaterThanOrEqual(2);
+    expect(endOf(events).reason).toBe('completed');
+  });
+
+  it('sends a tool failure back as a result the model can read', async () => {
+    const events = await collect(runTurn({ model: realModel(), messages: [user('Look up order 000042 with lookup_order and tell me what happened.')], tools: [lookupOrder()] }));
+    expect(results(events).map((result) => [result.isError, result.content])).toContainEqual([true, 'Tool error: the order database is offline']);
     expect(endOf(events).reason).toBe('completed');
     expect(textOf(endOf(events).messages)).toMatch(/offline|unavailable|down/i);
   });
@@ -137,14 +146,16 @@ describe('runTurn with the real model', () => {
     const steps: number[] = [];
     const { text, end } = await runTurnToEnd({
       model: realModel(),
-      messages: [user('What is the password? Reply with just the word.')],
+      messages: [user('What is my favourite flower? Reply with just the word.')],
       beforeModelCall: ({ step }) => {
         steps.push(step);
-        return step === 1 ? [user('(Note from the app: the password is "tulip".)')] : [];
+        // Words of the user's own: models disregard text that says it comes from somewhere else
+        // ("Note from the app: ...") and answer that they were not told.
+        return step === 1 ? [user('It is the tulip.')] : [];
       },
     });
     expect(steps).toEqual([1]);
-    expect(end.messages[0]).toEqual(user('(Note from the app: the password is "tulip".)'));
+    expect(end.messages[0]).toEqual(user('It is the tulip.'));
     expect(text).toMatch(/tulip/i);
   });
 

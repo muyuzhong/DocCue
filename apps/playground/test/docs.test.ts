@@ -23,7 +23,8 @@ describe('answering from the docs', () => {
     const conversation = await user.conversation();
     expect(toolsCalled(conversation).some((name) => name === 'search_docs' || name === 'read_doc')).toBe(true);
     const answer = (await user.answers()).at(-1) ?? '';
-    expect(answer).toMatch(/无法恢复|不能恢复|不可恢复/);
+    // "无法恢复", or put another way: "不能。删除是不可逆的…"
+    expect(answer).toMatch(/无法恢复|不能恢复|不可恢复|不可逆|^不能/);
   });
 
   it('explains an error with the cause the docs give', async () => {

@@ -353,18 +353,20 @@ export function runGuide(options: GuideOptions): RunningGuide {
     done,
     action(element) {
       if (ended) return;
+      const on = (target: Element | undefined) => !!target && (target === element || target.contains(element));
       // The current step, or a later one the user got to first: the steps in between count as skipped.
-      // A step that only explains waits for Next, but acting on its own element is done with it too:
-      // models mark steps like "turn on Advanced" that way.
       for (let at = index; at < steps.length; at++) {
-        if (steps[at]!.expect === 'ack' && at !== index) continue;
-        const target = at === index ? current : options.find(at);
-        if (!target || (target !== element && !target.contains(element))) continue;
+        if (steps[at]!.expect === 'ack') continue;
+        if (!on(at === index ? current : options.find(at))) continue;
         for (let passed = index; passed < at; passed++) if (steps[passed]!.expect !== 'ack') skipped.push(passed + 1);
         index = at;
         advance();
         return;
       }
+      // Otherwise a step that only explains, acted on anyway: done with it too (models mark steps
+      // like "turn on Advanced" that way). Last, so that an ack step followed by a step on the
+      // same element ("fill in the email" to read, then to do) still goes to the second.
+      if (steps[index]!.expect === 'ack' && on(current)) advance();
     },
     stop() {
       finish(undefined);

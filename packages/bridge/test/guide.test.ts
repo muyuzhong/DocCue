@@ -133,6 +133,17 @@ describe('runGuide', () => {
     await expect(running.done).resolves.toEqual({ outcome: 'completed', completedSteps: 2 });
   });
 
+  it('goes past an explaining step and its doing step on the same element with one action', async () => {
+    // A model sends "fill in the host" to read, then to do, both on the field: filling it in once is both.
+    const running = start([
+      { selector: '#host', text: '在主机地址里填 127.0.0.1', expect: 'ack' },
+      { selector: '#host', text: '输入 127.0.0.1' },
+      { selector: '#test', text: '再测一次' },
+    ]);
+    running.action($('#host'));
+    expect(bubbleText()).toBe('再测一次');
+  });
+
   it('jumps ahead when the user does a later step first, and counts the ones in between as skipped', async () => {
     const running = start([
       { selector: 'h1', text: '这里是新建页面', expect: 'ack' },

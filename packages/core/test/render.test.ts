@@ -203,6 +203,37 @@ describe('readSteps', () => {
   });
 });
 
+describe('guide steps on the row they mean', () => {
+  it('sends back a step whose text is about another row than its target', async () => {
+    const { guideTool } = await import('../src/agent/guide.js');
+    const row = (ref: number, name: string, ip: string) => ({
+      ref,
+      role: 'row',
+      children: [{ role: 'text', name }, { role: 'text', name: 'MySQL' }, { role: 'text', name: ip }, { ref: ref + 1, role: 'button', name: '删除' }],
+    });
+    const screen = { page: { path: '/datasource' }, nodes: [{ ref: 1, role: 'table', children: [row(61, 'ds-37', '10.1.0.37'), row(64, 'ds-38', '10.1.0.38')] }] };
+    const tool = guideTool(screen);
+    expect(tool.validate!({ steps: [{ target: 62, text: '这是 ds-38（10.1.0.38）那一行，点右侧的「删除」。' }] })).toBe(
+      'steps[0].target: [62] is in the row of "ds-37", but the text is about the row of "ds-38": point at the element in the row the text means',
+    );
+    expect(tool.validate!({ steps: [{ target: 65, text: '这是 ds-38 那一行，点「删除」。' }] })).toBeUndefined();
+    // Text shared by the rows ("MySQL", "删除") names none of them.
+    expect(tool.validate!({ steps: [{ target: 62, text: '点这个 MySQL 数据源的「删除」' }] })).toBeUndefined();
+  });
+
+  it('sends back a step on one button of a row whose text quotes another', async () => {
+    const { guideTool } = await import('../src/agent/guide.js');
+    const screen = {
+      page: { path: '/datasource' },
+      nodes: [{ ref: 1, role: 'table', children: [{ ref: 64, role: 'row', children: [{ role: 'text', name: 'ds-38' }, { ref: 65, role: 'button', name: '编辑' }, { ref: 66, role: 'button', name: '删除' }] }] }],
+    };
+    const tool = guideTool(screen);
+    expect(tool.validate!({ steps: [{ target: 65, text: '找到 ds-38 这一行，点右侧的「删除」' }] })).toBe('steps[0].target: [65] is "编辑", but the text says "删除": point at "删除" in the same row');
+    expect(tool.validate!({ steps: [{ target: 66, text: '点「删除」，不是「编辑」' }] })).toBeUndefined();
+    expect(tool.validate!({ steps: [{ target: 65, text: '先点「编辑」改端口' }] })).toBeUndefined();
+  });
+});
+
 describe('guide steps in the language of the question', () => {
   it('sends back steps in the screen language when the user wrote in another one', async () => {
     const { guideTool } = await import('../src/agent/guide.js');
