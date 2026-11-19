@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Teamspace · Members</title>
+    <link rel="icon" href="data:," />
+    <style>
+      body { font: 15px/1.5 system-ui, sans-serif; margin: 0; color: #1e293b; background: #f8fafc; }
+      main { max-width: 640px; margin: 40px auto; padding: 0 20px; }
+      section { background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+      h1 { font-size: 22px; } h2 { font-size: 17px; margin-top: 0; }
+      label { display: block; font-weight: 600; margin-bottom: 4px; }
+      input { font: inherit; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; width: 100%; box-sizing: border-box; }
+      button { font: inherit; margin-top: 12px; padding: 6px 16px; border-radius: 6px; border: 0; background: #2563eb; color: #fff; cursor: pointer; }
+      .error { color: #b91c1c; } .ok { color: #15803d; }
+      .hint { color: #64748b; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Members</h1>
+
+      <section>
+        <h2>Invite a teammate</h2>
+        <form id="invite">
+          <label for="email">Email</label>
+          <input id="email" type="email" placeholder="name@company.com" />
+          <button type="submit">Send invite</button>
+          <p id="invite-result" role="alert"></p>
+        </form>
+      </section>
+
+      <section>
+        <h2>Allowed email domains</h2>
+        <form id="domains">
+          <label for="domain-list">Domains</label>
+          <input id="domain-list" />
+          <p class="hint">Separate domains with commas.</p>
+          <button type="submit">Save domains</button>
+          <p id="domains-result" role="status"></p>
+        </form>
+      </section>
+    </main>
+
+    <!-- The app's own code. -->
+    <script type="module">
+      const post = (path, data) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+      const domainList = document.getElementById('domain-list');
+      domainList.value = (await (await fetch('/api/domains')).json()).domains.join(', ');
+
+      document.getElementById('invite').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const out = document.getElementById('invite-result');
+        const response = await post('/api/invite', { email: document.getElementById('email').value });
+        const result = await response.json();
+        out.className = response.ok ? 'ok' : 'error';
+        out.textContent = response.ok ? `Invite sent to ${result.invited}.` : result.error;
+      });
+
+      document.getElementById('domains').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const result = await (await post('/api/domains', { domains: domainList.value })).json();
+        domainList.value = result.domains.join(', ');
+        document.getElementById('domains-result').textContent = 'Saved.';
+      });
+    </script>
+
+    <!-- DocCue: the bridge and its chat panel. -->
+    <script type="importmap">
+      { "imports": { "@doccue/bridge": "/vendor/bridge/index.js", "@doccue/protocol": "/vendor/protocol/index.js" } }
+    </script>
+    <script type="module">
+      import { createBridge } from '@doccue/bridge';
+
+      const cue = createBridge({ endpoint: '/doccue' }); // records what the user does from here on
+      cue.mount(); // the chat button in the corner
+    </script>
+  </body>
+</html>

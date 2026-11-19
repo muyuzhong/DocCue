@@ -1,0 +1,16 @@
+{
+  "name": "doccue-example-basic",
+  "private": true,
+  "type": "module",
+  "description": "DocCue on a plain page: node:http on the backend, an import map on the frontend, no build step",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "dependencies": {
+    "@doccue/bridge": "^0.1.0",
+    "@doccue/core": "^0.1.0"
+  }
+}
