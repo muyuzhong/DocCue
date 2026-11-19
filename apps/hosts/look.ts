@@ -4,42 +4,24 @@
  * with counts of what may be wrong (controls without a name, nodes cut by the size cap, content
  * the snapshot cannot reach: shadow roots, iframes, canvases).
  *
- *   pnpm --filter @doccue/hosts look [screen name part]
+ *   pnpm --filter @doccue/hosts look <app> [screen name part]
  *
- * HOST_URL reuses a running Grafana with DocCue (`pnpm --filter @doccue/hosts grafana`).
- * Snapshots and screenshots go to apps/hosts/.cache/look/.
+ * Each run starts a fresh copy of the app.
+ * Snapshots and screenshots go to apps/hosts/.cache/look/<app>/.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Bridge } from '@doccue/bridge';
 import { renderScreen, type ScreenNode } from '@doccue/core';
-import { chromium, type Page } from 'playwright-core';
-import { startGrafana } from './grafana/grafana.js';
+import { chromium } from 'playwright-core';
+import { hostApp, resolvePath } from './host.js';
 
 declare global {
   interface Window {
     doccue: Bridge;
   }
 }
-
-interface View {
-  name: string;
-  path: string;
-  /** What to do on the page before looking, e.g. open a menu. */
-  prepare?: (page: Page) => Promise<void>;
-}
-
-const views: View[] = [
-  { name: 'home', path: '/' },
-  { name: 'datasources', path: '/connections/datasources' },
-  { name: 'add-datasource', path: '/connections/datasources/new' },
-  { name: 'datasource-config', path: '/connections/datasources/edit/prometheus-prod' },
-  { name: 'dashboard', path: '/d/service-overview' },
-  { name: 'time-picker', path: '/d/service-overview', prepare: (page) => page.getByTestId('data-testid TimePicker Open Button').click() },
-  { name: 'panel-editor', path: '/d/service-overview?editPanel=1' },
-  { name: 'new-alert-rule', path: '/alerting/new/alerting' },
-];
 
 const CONTROLS = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'switch', 'tab', 'menuitem', 'option', 'slider', 'spinbutton', 'listbox']);
 
@@ -55,19 +37,21 @@ function count(nodes: ScreenNode[], out = { nodes: 0, controls: 0, unnamed: [] a
   return out;
 }
 
-const filter = process.argv[2];
-const running = process.env.HOST_URL ? undefined : await startGrafana();
-const base = process.env.HOST_URL ?? running!.url;
-const outDir = fileURLToPath(new URL('.cache/look/', import.meta.url));
+const app = await hostApp(process.argv[2]);
+const filter = process.argv[3];
+const host = await app.start();
+const base = host.url;
+const outDir = fileURLToPath(new URL(`.cache/look/${app.name}/`, import.meta.url));
 mkdirSync(outDir, { recursive: true });
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 
 try {
-  for (const view of views.filter((v) => !filter || v.name.includes(filter))) {
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  for (const view of app.views.filter((v) => !filter || v.name.includes(filter))) {
+    const page = await host.newPage(browser);
     const errors: string[] = [];
     page.on('pageerror', (error) => errors.push(error.message));
-    await page.goto(`${base}${view.path}`);
+    const path = await resolvePath(view.path, host);
+    await page.goto(`${base}${path}`);
     await page.waitForFunction(() => window.doccue !== undefined, null, { timeout: 20_000 });
     await page.waitForTimeout(3000);
     if (view.prepare) {
@@ -90,7 +74,7 @@ try {
     const stats = count(perception.screen.nodes);
     writeFileSync(join(outDir, `${view.name}.txt`), `${text}\n`);
     await page.screenshot({ path: join(outDir, `${view.name}.png`) });
-    console.log(`\n== ${view.name}  ${view.path}`);
+    console.log(`\n== ${view.name}  ${path}`);
     console.log(
       `   DOM ${unseen.elements} elements → snapshot ${stats.nodes} nodes, ${stats.controls} controls, ${text.length} chars, ${took} ms` +
         `${perception.screen.truncated ? `, ${perception.screen.truncated} cut by the cap` : ''}`,
@@ -103,5 +87,5 @@ try {
   console.log(`\nsnapshots and screenshots: ${outDir}`);
 } finally {
   await browser.close();
-  await running?.close();
+  await host.close();
 }

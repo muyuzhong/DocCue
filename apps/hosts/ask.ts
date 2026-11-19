@@ -4,153 +4,22 @@
  * and pressing Enter), across pages and menus, and reports for each case where the first step
  * pointed, every step, whether the goal was reached, and the model's time and tokens.
  *
- *   pnpm --filter @doccue/hosts ask [case name part]
+ *   pnpm --filter @doccue/hosts ask <app> [case name part]
  *
- * Each case gets a fresh Grafana. Uses the system Chrome and the model from the root .env.
+ * Each case gets a fresh copy of the app. DOCS=off gives DocCue none of the app's docs, to see
+ * what they change. Uses the system Chrome and the model from the root .env.
  */
 import { readFileSync } from 'node:fs';
 import type { Bridge } from '@doccue/bridge';
 import type { LogRecord } from '@doccue/core';
 import { chromium, type ElementHandle, type Page } from 'playwright-core';
-import { startGrafana, type Grafana } from './grafana/grafana.js';
+import { hostApp, resolvePath, type Case, type HostApp } from './host.js';
 
 declare global {
   interface Window {
     doccue: Bridge;
   }
 }
-
-interface Case {
-  name: string;
-  start: string;
-  /** What the user did before asking. */
-  prepare?: (page: Page) => Promise<void>;
-  question: string;
-  /** What the user types, by a pattern on the field's label. */
-  values?: Array<[RegExp, string]>;
-  /** Where the first step should point (a pattern on the control's label); `null`: no guide wanted. */
-  first?: RegExp | null;
-  /** Only look at the first step, then stop. */
-  firstOnly?: boolean;
-  goal?: (grafana: Grafana, page: Page) => Promise<boolean>;
-  /** The language the answer must be in (judged by its script). */
-  answerIn?: 'en' | 'zh';
-  /** Also passes when this holds for the bubbles and the answer, e.g. a hint the script can't follow. */
-  orSaid?: RegExp;
-}
-
-const dashboard = async (grafana: Grafana) =>
-  ((await grafana.api('/api/dashboards/uid/service-overview')) as { dashboard: { panels: Array<{ id: number; title: string }> } }).dashboard;
-
-const cases: Case[] = [
-  {
-    name: 'fix-prometheus',
-    start: '/connections/datasources/edit/prometheus-prod',
-    prepare: async (page) => {
-      await page.getByRole('button', { name: '保存并测试' }).click();
-      await page.waitForTimeout(3000);
-    },
-    question: '为什么测试失败了？该怎么改？',
-    first: /URL/i,
-    firstOnly: true,
-  },
-  {
-    name: 'new-mysql',
-    start: '/',
-    question: '我想新建一个 MySQL 数据源，名字叫 orders，地址是 10.0.0.8:3306，数据库 shop，用户名 app，密码 secret，带我做一遍。',
-    values: [
-      [/filter|筛选|搜索|search/i, 'MySQL'],
-      [/^name$|名称/i, 'orders'],
-      [/host|主机|url/i, '10.0.0.8:3306'],
-      [/database|数据库/i, 'shop'],
-      [/user|用户/i, 'app'],
-      [/password|密码/i, 'secret'],
-    ],
-    first: /连接|数据源|添加新连接|新建|connection/i,
-    goal: async (grafana) => ((await grafana.api('/api/datasources')) as Array<{ type: string; name: string; url: string }>).some((d) => d.type === 'mysql' && d.name === 'orders' && d.url === '10.0.0.8:3306'),
-  },
-  {
-    name: 'fix-mysql-form',
-    start: '/connections/datasources/edit/mysql-orders',
-    question: '帮我把这个 MySQL 数据源改成连 10.0.0.8:3306，数据库 shop，用户名 app，密码 secret，然后保存。带我做一遍。',
-    values: [
-      [/host/i, '10.0.0.8:3306'],
-      [/database|数据库/i, 'shop'],
-      [/user|用户/i, 'app'],
-      [/password|密码/i, 'secret'],
-    ],
-    first: /host/i,
-    goal: async (grafana) => {
-      const saved = (await grafana.api('/api/datasources/uid/mysql-orders')) as { url: string; user: string; jsonData: { database?: string }; secureJsonFields: { password?: boolean } };
-      return saved.url === '10.0.0.8:3306' && saved.user === 'app' && saved.jsonData.database === 'shop' && saved.secureJsonFields.password === true;
-    },
-  },
-  {
-    name: 'refresh-off',
-    start: '/d/service-overview',
-    question: '这个仪表盘一直在自动刷新，怎么关掉？',
-    first: /刷新/,
-    goal: async (_grafana, page) => !page.url().includes('refresh='),
-  },
-  {
-    name: 'time-7d',
-    start: '/d/service-overview',
-    question: '把时间范围改成最近 7 天。',
-    first: /时间范围/,
-    goal: async (_grafana, page) => page.url().includes('from=now-7d'),
-  },
-  {
-    name: 'rename-panel',
-    start: '/d/service-overview',
-    question: '把 CPU 这个面板的标题改成 CPU usage，再保存仪表盘，带我做一遍。',
-    values: [[/标题|title/i, 'CPU usage']],
-    // The panel's menu only shows while the pointer is over the panel: a hint the script can't follow.
-    orSaid: /悬停|移到|hover/i,
-    goal: async (grafana) => (await dashboard(grafana)).panels.some((panel) => panel.id === 3 && panel.title === 'CPU usage'),
-  },
-  {
-    name: 'scenario-csv',
-    start: '/d/service-overview?editPanel=1',
-    question: '把这个查询的场景从 Random Walk 换成 CSV Metric Values。',
-    values: [[/scenario/i, 'CSV Metric Values']],
-    first: /scenario/i,
-    goal: async (_grafana, page) => page.getByText('CSV Metric Values', { exact: true }).first().isVisible(),
-  },
-  {
-    name: 'alert-rule-first-step',
-    start: '/',
-    question: '怎么新建一条告警规则？',
-    first: /警报|告警|alert|新建/i,
-    firstOnly: true,
-  },
-  {
-    name: 'english-add-datasource',
-    start: '/',
-    question: 'How do I add a new data source?',
-    answerIn: 'en',
-    first: /连接|数据源|添加新连接|新建|connection|data source/i,
-    firstOnly: true,
-  },
-  {
-    // Chinese with product words in English: the message's language is still Chinese.
-    name: 'mixed-zh',
-    start: '/connections/datasources/edit/prometheus-prod',
-    prepare: async (page) => {
-      await page.getByRole('button', { name: '保存并测试' }).click();
-      await page.waitForTimeout(3000);
-    },
-    question: 'prometheus-prod 这个 datasource 为什么 test 失败了？',
-    first: /URL/i,
-    firstOnly: true,
-    answerIn: 'zh',
-  },
-  {
-    name: 'no-guide',
-    start: '/connections/datasources',
-    question: 'TestData 这个数据源是用来做什么的？',
-    first: null,
-  },
-];
 
 interface Target {
   handle: ElementHandle<Element>;
@@ -180,7 +49,7 @@ async function highlighted(page: Page): Promise<Target | undefined> {
       tag: node.tagName.toLowerCase(),
       type: field.type ?? '',
       role: node.getAttribute('role') ?? '',
-      label: (node.getAttribute('aria-label') ?? field.labels?.[0]?.textContent ?? node.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 60),
+      label: (node.getAttribute('aria-label') ?? field.labels?.[0]?.textContent ?? (node.getAttribute('placeholder') || node.textContent) ?? '').replace(/\s+/g, ' ').trim().slice(0, 60),
       disabled: field.disabled === true || node.getAttribute('aria-disabled') === 'true',
     };
   });
@@ -207,16 +76,16 @@ interface Report {
   wallMs: number;
 }
 
-async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launch>>): Promise<Report> {
-  const grafana = await startGrafana();
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+async function run(app: HostApp, test: Case, browser: Awaited<ReturnType<typeof chromium.launch>>): Promise<Report> {
+  const host = await app.start({ language: test.language, docs: process.env.DOCS !== 'off' });
+  const page = await host.newPage(browser);
   const bubble = page.locator('[data-doccue-guide] .bubble');
   const steps: string[] = [];
   let first: string | undefined;
   let guided = false;
   const started = Date.now();
   try {
-    await page.goto(`${grafana.url}${test.start}`);
+    await page.goto(`${host.url}${await resolvePath(test.start, host)}`);
     await page.waitForFunction(() => window.doccue !== undefined, null, { timeout: 20_000 });
     await page.waitForTimeout(2500);
     await test.prepare?.(page);
@@ -233,7 +102,7 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
       try {
         if (Date.now() > deadline) throw new Error('did not finish in time');
         // A page stuck loading: reload it, as a person would after a while.
-        const loading = await page.evaluate(() => /正在加载|Loading\.\.\./.test(document.body.innerText));
+        const loading = app.loading ? await page.evaluate((source) => new RegExp(source).test(document.body.innerText), app.loading.source) : false;
         loadingSince = loading ? (loadingSince ?? Date.now()) : undefined;
         if (loadingSince !== undefined && Date.now() - loadingSince > 6000) {
           steps.push('(page stuck loading: reload)');
@@ -257,11 +126,13 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
         }
         repeats = text === last ? repeats + 1 : 0;
         last = text;
-        const value = target ? valueFor(test, target.label) : undefined;
+        // By the field's label, else by what the bubble says (a date picker's input may be labelled "Datepicker input").
+        const value = target ? (valueFor(test, target.label) ?? valueFor(test, text)) : undefined;
         const combobox = target && (target.role === 'combobox' || target.tag === 'select');
         const field = target && !combobox && (target.tag === 'textarea' || (target.tag === 'input' && !['checkbox', 'radio', 'button', 'submit'].includes(target.type)));
         let did: string;
-        if (!target || target.disabled || repeats >= 2) {
+        // A file chooser is not something the script can fill: it moves on as a person without the file would.
+        if (!target || target.disabled || repeats >= 2 || target.type === 'file') {
           did = 'Next';
           await bubble.locator('.next').click();
         } else if (combobox) {
@@ -275,6 +146,27 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
             if (await option.isVisible().catch(() => false)) await option.click();
             else await page.keyboard.press('Enter');
           }
+        } else if (field && value && /^\d{4}-\d{2}-\d{2}$/.test(value) && (await target.handle.evaluate((node) => (node as HTMLInputElement).readOnly || node.getAttribute('inputmode') === 'none'))) {
+          // A date picker that takes no typing: open it and click the day, as a person would. Cases
+          // use a date in the month it opens on.
+          did = `pick date "${target.label}" = ${value}`;
+          await target.handle.click();
+          await page.waitForTimeout(500);
+          const day = String(Number(value.slice(8)));
+          // The day of this month, not the same number from the month before or after shown around it.
+          const cells = page.locator('[role="gridcell"], td').filter({ hasText: new RegExp(`^\\s*${day}\\s*$`) });
+          let clicked = false;
+          for (let i = 0; i < (await cells.count()) && !clicked; i++) {
+            const cell = cells.nth(i);
+            const outside = await cell.evaluate((node) => /offset|outside|other|adjacent|disabled/i.test(`${node.className} ${node.firstElementChild?.className ?? ''}`));
+            if (outside || !(await cell.isVisible().catch(() => false))) continue;
+            await cell.click();
+            clicked = true;
+          }
+          if (!clicked) did += ' (no day to click)';
+          await page.waitForTimeout(300);
+          const confirm = page.getByRole('button', { name: /^(select|选择|确定|apply|ok)$/i }).first();
+          if (await confirm.isVisible().catch(() => false)) await confirm.click();
         } else if (field) {
           // A field the case has no value for gets something that fits it.
           const typed = value ?? (target.type === 'number' ? '1' : 'test');
@@ -297,24 +189,27 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     }
     if (!test.firstOnly) await page.waitForFunction(() => !window.doccue.busy(), null, { timeout: 120_000 }).catch(() => undefined);
     const said = await page.locator('[data-doccue-panel] .message.assistant').allInnerTexts().catch(() => []);
-    const answer = (said.at(-1) ?? '').replace(/\s+/g, ' ').slice(0, 200);
+    const fullAnswer = (said.at(-1) ?? '').replace(/\s+/g, ' ');
+    const answer = fullAnswer.slice(0, 300);
 
     let why: string | undefined;
     if (test.first === null && guided) why = 'guided, but no guide was wanted';
     else if (test.first && !(first !== undefined && test.first.test(first))) why = 'first step pointed elsewhere';
-    else if (test.goal && !test.firstOnly && !(await test.goal(grafana, page))) why = 'goal not reached';
+    else if (test.goal && !test.firstOnly && !(await test.goal(host, page))) why = 'goal not reached';
+    else if (test.says && !test.says.test(`${steps.join(' ')} ${fullAnswer}`)) why = `the answer does not say ${test.says}`;
+    else if (test.never?.test(`${steps.join(' ')} ${fullAnswer}`)) why = `the answer says ${test.never}`;
     if (!why && test.answerIn) {
-      const said = `${steps.join(' ')} ${answer}`;
+      const said = `${steps.join(' ')} ${fullAnswer}`;
       const cjk = (said.match(/[\u4e00-\u9fff]/g) ?? []).length;
       const latin = (said.match(/[A-Za-z]/g) ?? []).length;
       if (test.answerIn === 'en' && cjk >= latin) why = 'answered in Chinese to an English question';
       // Chinese with names and URLs in Latin letters: a good share of Chinese characters is enough.
       if (test.answerIn === 'zh' && cjk < 20) why = 'answered in English to a Chinese question';
     }
-    if (why && test.orSaid?.test(`${steps.join(' ')} ${answer}`)) why = undefined;
+    if (why && test.orSaid?.test(`${steps.join(' ')} ${fullAnswer}`)) why = undefined;
     const pass = why === undefined;
 
-    const records = readFileSync(grafana.proxy.logFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as LogRecord);
+    const records = readFileSync(host.proxy.logFile, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as LogRecord);
     const calls = records.filter((record) => record.kind === 'model_call');
     const rejected = new Set<string>();
     for (const call of calls)
@@ -344,19 +239,20 @@ async function run(test: Case, browser: Awaited<ReturnType<typeof chromium.launc
     };
   } finally {
     await page.close();
-    await grafana.close();
+    await host.close();
   }
 }
 
-const filter = process.argv[2];
-const selected = cases.filter((test) => !filter || test.name.includes(filter));
+const app = await hostApp(process.argv[2]);
+const filter = process.argv[3];
+const selected = app.cases.filter((test) => !filter || test.name.includes(filter));
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 let passed = 0;
 try {
   for (const test of selected) {
     console.log(`\n== ${test.name}\n   ${test.question}`);
     try {
-      const report = await run(test, browser);
+      const report = await run(app, test, browser);
       if (report.pass) passed++;
       console.log(`   first step: ${report.first ?? '(no guide)'}`);
       for (const step of report.steps) console.log(`     ${step}`);

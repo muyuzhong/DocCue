@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "grafana": "pnpm -w build && tsx grafana/run.ts",
+    "serve": "pnpm -w build && tsx serve.ts",
+    "grafana": "pnpm -w build && tsx serve.ts grafana",
+    "homebox": "pnpm -w build && tsx serve.ts homebox",
     "look": "pnpm -w build && tsx look.ts",
     "ask": "pnpm -w build && tsx ask.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
