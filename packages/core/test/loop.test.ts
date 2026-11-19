@@ -6,7 +6,7 @@ import { createAnthropic } from '../src/model/anthropic.js';
 import { ModelError } from '../src/model/errors.js';
 import type { Message, ToolResult } from '../src/model/types.js';
 import { collect, mockFetch, sseResponse } from './helpers.js';
-import { realModel, rejectedModel } from './model.js';
+import { describeWithModel, realModel, rejectedModel } from './model.js';
 
 const user = (text: string): Message => ({ role: 'user', content: text });
 const textOf = (messages: readonly Message[]) =>
@@ -28,7 +28,7 @@ function secretWord(): Tool & { calls: number } {
   };
 }
 
-describe('runTurn with the real model', () => {
+describeWithModel('runTurn with the real model', () => {
   it('answers in one step when no tool is needed', async () => {
     const events = await collect(runTurn({ model: realModel(), system: 'Reply with one word.', messages: [user('What colour is a clear daytime sky?')] }));
     expect(events.filter((event) => event.type === 'step_start')).toHaveLength(1);

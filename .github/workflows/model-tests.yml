@@ -1,0 +1,50 @@
+# The tests with the real model, by hand (Actions → Model tests → Run workflow): every test,
+# then the single-step evals and the multi-step journeys. The playground tests drive the
+# runner's Google Chrome.
+#
+# Needs, in the repository settings:
+#   secrets  ANTHROPIC_API_KEY (or OPENAI_API_KEY), and DOCCUE_BASE_URL when going through a gateway
+#   variables DOCCUE_PROVIDER (anthropic | openai), DOCCUE_MODEL, DOCCUE_PROMPT_CACHE (optional)
+# Each run spends tokens.
+name: Model tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DOCCUE_PROVIDER: ${{ vars.DOCCUE_PROVIDER }}
+      DOCCUE_MODEL: ${{ vars.DOCCUE_MODEL }}
+      DOCCUE_PROMPT_CACHE: ${{ vars.DOCCUE_PROMPT_CACHE }}
+      DOCCUE_BASE_URL: ${{ secrets.DOCCUE_BASE_URL }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm eval
+        if: ${{ !cancelled() }}
+      - run: pnpm journeys
+        if: ${{ !cancelled() }}
+      # Every model call is logged; keep them to see what the model was given when something fails.
+      - uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        with:
+          name: logs
+          path: |
+            apps/playground/.logs/
+            packages/core/.logs/
+          if-no-files-found: ignore

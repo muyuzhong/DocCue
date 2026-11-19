@@ -81,6 +81,12 @@ apps/
     serve.ts              某个应用 + DocCue，手动试
     look.ts               不调模型：在几个典型界面上导出 agent 看到的快照，统计无名控件、被上限裁掉的节点、够不着的内容
     ask.ts                调真实模型：脚本扮演用户提问并跟着引导走（包括在日历里点日子），报告第一步指向、每一步、是否达成、回答里该说和不该说的话、模型耗时和 token
+examples/                 接入示例，各自是独立项目，依赖已发布的 @doccue/* 包（不在 pnpm 工作区里）
+  basic/                  node:http + 用 import map 的纯 HTML 页面，不需要构建
+  nextjs/                 Next.js App Router：路由处理器 + 客户端组件
+.github/workflows/
+  ci.yml                  每次推送：构建、类型检查、不调模型的测试（DOCCUE_SKIP_MODEL_TESTS=1）
+  model-tests.yml         手动触发：全部测试、单步评测、多步评测，需要在仓库设置里配密钥
 ```
 
 依赖方向：`bridge` 和 `core` 都只依赖 `protocol`，互不依赖。`core` 内部从里到外是 model → loop → render → agent → server，里层不知道外层。
@@ -109,6 +115,19 @@ apps/
 - `pnpm playground`：演示页面。
 - `pnpm --filter @doccue/playground e2e`：本机 Chrome 自动操作演示页面并提问，跟着引导走，打印模型看到的内容和回答。
 - `pnpm replay <日志> [编号]`：把日志里的一次模型调用原样重发。
+- CI 里设置 `DOCCUE_SKIP_MODEL_TESTS=1`，core 里调模型的 `describe` 块（`describeWithModel`）会跳过。本地不设置时，缺密钥直接失败，不会悄悄跳过。
+- 示例没有自动测试：改了接入方式后，手动把示例复制出去，依赖换成 `pnpm pack` 打出的 tgz，装好后启动，在浏览器里问一遍。
 - `pnpm --filter @doccue/hosts serve <grafana|homebox>`：真实应用 + DocCue，手动试（http://localhost:5180）。`LANG_UI=en-US` 换界面语言，`DOCS=off` 不给文档。第一次会下载发布包（Grafana 约 500 MB，Homebox 约 40 MB）。`grafana`、`homebox` 两个脚本是它的简写。
 - `pnpm --filter @doccue/hosts look <应用> [界面名片段]`：agent 在这个应用上看到了什么，不调模型。
 - `pnpm --filter @doccue/hosts ask <应用> [场景名片段]`：真实模型场景，每个场景一个新的应用实例。`DOCS=off` 不给文档，用来对比文档起了多大作用。不在 `pnpm test` 里（要下载应用）。
+
+## 发布
+
+三个包都是 `0.1.0`，MIT，发布到 npm 的 `@doccue` 组织下。
+
+1. 在 npm 上建 `doccue` 组织（公开包免费），`npm login`。
+2. `pnpm build`，然后 `pnpm -r --filter "./packages/*" publish --dry-run` 看一遍要发的文件。
+3. `pnpm -r --filter "./packages/*" publish`。pnpm 按依赖顺序发布（protocol → bridge → core），把 `workspace:*` 换成实际版本，并用 `publishConfig.exports` 去掉只给仓库开发用的 `source` 条件。pnpm 默认要求在 main 分支、工作区干净时发布。
+4. 发布后把两份 README 里"尚未发布到 npm"改掉，路线图里勾上"第一个版本"。
+
+包里有 `dist`（含 sourcemap）、`src`（让 sourcemap 能对上源码）、README 和 LICENSE。

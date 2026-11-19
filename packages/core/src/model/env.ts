@@ -19,10 +19,10 @@ export function createModelFromEnv(env: ModelEnv): ModelAdapter {
   // Prompt caching is on by default only for Anthropic's own endpoint; a gateway that passes it
   // through can turn it on.
   const cache = get('DOCCUE_PROMPT_CACHE')?.toLowerCase();
-  if (cache !== undefined && !['on', 'off'].includes(cache)) throw new Error(`DOCCUE_PROMPT_CACHE 只能是 on 或 off（现在是 ${cache}）`);
+  if (cache !== undefined && !['on', 'off'].includes(cache)) throw new Error(`DOCCUE_PROMPT_CACHE must be on or off (it is ${cache})`);
   if (provider === 'anthropic') {
     const apiKey = get('ANTHROPIC_API_KEY');
-    if (!apiKey) throw new Error('缺少 ANTHROPIC_API_KEY');
+    if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not set');
     const effort = get('DOCCUE_EFFORT');
     return createAnthropic({
       apiKey,
@@ -34,9 +34,9 @@ export function createModelFromEnv(env: ModelEnv): ModelAdapter {
   }
   if (provider === 'openai') {
     const model = get('DOCCUE_MODEL');
-    if (!model) throw new Error('缺少 DOCCUE_MODEL');
+    if (!model) throw new Error('DOCCUE_MODEL is not set (an OpenAI-compatible API needs the model name)');
     const apiKey = get('OPENAI_API_KEY');
     return createOpenAI({ model, ...base, ...(apiKey ? { apiKey } : {}) });
   }
-  throw new Error(`不知道用哪个模型：请设置 ANTHROPIC_API_KEY，或 DOCCUE_PROVIDER=openai${provider ? `（不认识 DOCCUE_PROVIDER=${provider}）` : ''}`);
+  throw new Error(`No model configured: set ANTHROPIC_API_KEY, or DOCCUE_PROVIDER=openai with OPENAI_API_KEY and DOCCUE_MODEL${provider ? ` (DOCCUE_PROVIDER=${provider} is not one of anthropic, openai)` : ''}`);
 }

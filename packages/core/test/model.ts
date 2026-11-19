@@ -4,6 +4,7 @@
  */
 import { existsSync } from 'node:fs';
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
+import { describe } from 'vitest';
 import { createModelFromEnv } from '../src/model/env.js';
 import { withRetry } from '../src/model/retry.js';
 import type { ModelAdapter } from '../src/model/types.js';
@@ -12,6 +13,14 @@ import type { ModelAdapter } from '../src/model/types.js';
 setDefaultAutoSelectFamilyAttemptTimeout(2000);
 const ENV_FILE = new URL('../../../.env', import.meta.url);
 if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
+
+/**
+ * `describe` for tests that call the model. Skipped only when `DOCCUE_SKIP_MODEL_TESTS` is set,
+ * as CI does on every push (it has no key); without it a missing key fails, never skips quietly.
+ */
+export function describeWithModel(name: string, body: () => void): void {
+  (process.env.DOCCUE_SKIP_MODEL_TESTS ? describe.skip : describe)(name, body);
+}
 
 /** The configured model. `env` overrides settings, e.g. `{ DOCCUE_MAX_TOKENS: '40' }`. */
 export function realModel(env: Record<string, string> = {}): ModelAdapter {

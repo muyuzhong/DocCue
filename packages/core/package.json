@@ -1,7 +1,26 @@
 {
   "name": "@doccue/core",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "DocCue backend: model adapters, the agent loop and the HTTP handler",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muyuzhong/DocCue.git",
+    "directory": "packages/core"
+  },
+  "homepage": "https://github.com/muyuzhong/DocCue#readme",
+  "bugs": "https://github.com/muyuzhong/DocCue/issues",
+  "keywords": [
+    "doccue",
+    "onboarding",
+    "in-app-help",
+    "product-tour",
+    "agent",
+    "llm",
+    "claude",
+    "openai",
+    "docs"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,8 +37,25 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./node": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",

@@ -2,11 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { toJsonLine, withModelLog, type LogRecord, type ModelCallRecord } from '../src/log/log.js';
 import { ModelError } from '../src/model/errors.js';
 import { collect } from './helpers.js';
-import { realModel, rejectedModel } from './model.js';
+import { describeWithModel, realModel, rejectedModel } from './model.js';
 
 const ask = (text: string) => ({ system: 'Answer in one word.', messages: [{ role: 'user' as const, content: text }] });
 
-describe('withModelLog with the real model', () => {
+describeWithModel('withModelLog with the real model', () => {
   it('records exactly what was sent, what came back and how long it took', async () => {
     const records: ModelCallRecord[] = [];
     const model = withModelLog(realModel(), (record) => records.push(record));

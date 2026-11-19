@@ -11,7 +11,7 @@ import { parseTurnRequest } from '../src/protocol/parse.js';
 import { createHandler } from '../src/server/handler.js';
 import { toNodeHandler } from '../src/server/node.js';
 import { collect } from './helpers.js';
-import { realModel, rejectedModel } from './model.js';
+import { describeWithModel, realModel, rejectedModel } from './model.js';
 
 const INSTRUCTIONS = '你是「数据平台」的应用内助手。主机地址只填 IP 或域名，不带协议和端口。';
 
@@ -64,7 +64,7 @@ async function readEvents(response: Response): Promise<StreamEvent[]> {
 const endOf = (events: StreamEvent[]) => events.at(-1) as Extract<StreamEvent, { type: 'end' }>;
 const textOf = (events: StreamEvent[]) => events.map((event) => (event.type === 'text' ? event.delta : '')).join('');
 
-describe('respond with the real model', () => {
+describeWithModel('respond with the real model', () => {
   it('answers from what the user did and saw, and returns the messages to keep', async () => {
     const { logger, records } = createMemoryLog();
     const events = await collect(respond(ask('主机地址这一栏有什么要求？只用文字回答，不要在页面上指。'), { model: realModel(), instructions: INSTRUCTIONS, logger }));
@@ -155,7 +155,7 @@ describe('respond with the real model', () => {
   });
 });
 
-describe('createHandler', () => {
+describeWithModel('createHandler', () => {
   it('answers POST {base}/turn with the answer as server-sent events', async () => {
     const handler = createHandler({ model: realModel(), instructions: INSTRUCTIONS, basePath: '/doccue/' });
     // A page with nothing wrong on it: an error on screen invites a guide instead of words.
@@ -194,7 +194,7 @@ describe('createHandler', () => {
   });
 });
 
-describe('limits', () => {
+describeWithModel('limits', () => {
   it('turns away bodies and requests over the limits, saying which, without calling the model', async () => {
     const { logger, records } = createMemoryLog();
     const handler = createHandler({
@@ -275,7 +275,7 @@ describe('parseTurnRequest', () => {
   });
 });
 
-describe('createHandler when things go wrong', () => {
+describeWithModel('createHandler when things go wrong', () => {
   it('still ends the stream with an end event when something throws, and logs what it was', async () => {
     const { logger, records } = createMemoryLog();
     const docs: DocsProvider = {
@@ -300,7 +300,7 @@ describe('createHandler when things go wrong', () => {
   });
 });
 
-describe('toNodeHandler', () => {
+describeWithModel('toNodeHandler', () => {
   it('answers a request it cannot read with 400 instead of rejecting', async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);

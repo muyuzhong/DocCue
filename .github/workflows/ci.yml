@@ -1,0 +1,30 @@
+# Every push and pull request: build, type-check, and the tests that call no model. The tests
+# that do (with the real model, as all agent tests here are) run in model-tests.yml, by hand.
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # the version comes from packageManager in package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Before type-checking: apps/hosts checks against the built packages, as a host app would.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - name: Tests without the model
+        run: pnpm --filter "./packages/*" test
+        env:
+          DOCCUE_SKIP_MODEL_TESTS: '1'

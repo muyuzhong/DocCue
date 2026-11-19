@@ -8,7 +8,7 @@ import { createDocs, docsPrompt, docsTools, terms, type DocFile } from '../src/d
 import { markdownDocs } from '../src/docs/node.js';
 import { createMemoryLog } from '../src/log/log.js';
 import { collect } from './helpers.js';
-import { realModel } from './model.js';
+import { describeWithModel, realModel } from './model.js';
 
 /** Docs with facts the model can't know from elsewhere: a proxy port and a timeout. */
 const FILES: DocFile[] = [
@@ -148,7 +148,7 @@ describe('markdownDocs', () => {
   });
 });
 
-describe('answering from the docs, with the real model', () => {
+describeWithModel('answering from the docs, with the real model', () => {
   const page: Perception = {
     at: Date.now(),
     screen: {
@@ -181,7 +181,7 @@ describe('answering from the docs, with the real model', () => {
   });
 });
 
-describe('big docs', () => {
+describeWithModel('big docs', () => {
   it('shrinks a long table of contents level by level, then cuts it', () => {
     const files = Array.from({ length: 30 }, (_, i) => ({ path: `guide/${i}.md`, content: `# 指南 ${i}\n\n## 第一节\n\n### 细节\n\n正文。` }));
     const full = createDocs(files, { maxTocChars: 100_000 }).toc();

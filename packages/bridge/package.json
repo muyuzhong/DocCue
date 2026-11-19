@@ -1,7 +1,25 @@
 {
   "name": "@doccue/bridge",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "DocCue frontend: records what the user does in a web page, keeps the conversation and talks to the backend",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muyuzhong/DocCue.git",
+    "directory": "packages/bridge"
+  },
+  "homepage": "https://github.com/muyuzhong/DocCue#readme",
+  "bugs": "https://github.com/muyuzhong/DocCue/issues",
+  "keywords": [
+    "doccue",
+    "onboarding",
+    "in-app-help",
+    "product-tour",
+    "guided-tour",
+    "spotlight",
+    "agent",
+    "browser"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,9 +31,19 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.src.json --noEmit",

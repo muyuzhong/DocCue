@@ -1,7 +1,22 @@
 {
   "name": "@doccue/protocol",
-  "version": "0.0.1",
-  "description": "DocCue protocol: the data the frontend and the backend exchange (types only)",
+  "version": "0.1.0",
+  "description": "DocCue protocol: the data the frontend and the backend exchange (types, and the protocol version)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/muyuzhong/DocCue.git",
+    "directory": "packages/protocol"
+  },
+  "homepage": "https://github.com/muyuzhong/DocCue#readme",
+  "bugs": "https://github.com/muyuzhong/DocCue/issues",
+  "keywords": [
+    "doccue",
+    "onboarding",
+    "in-app-help",
+    "agent",
+    "types"
+  ],
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,9 +28,19 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
