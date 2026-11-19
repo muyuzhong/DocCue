@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: API & Integration Reference
+    url: https://github.com/muyuzhong/DocCue/blob/main/docs/api.md
+    about: Check all options, extension points, and known boundaries before opening an issue.
+  - name: Security Vulnerability
+    url: https://github.com/muyuzhong/DocCue/security/advisories/new
+    about: Report security vulnerabilities privately instead of opening a public issue.

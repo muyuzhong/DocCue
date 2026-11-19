@@ -5,6 +5,7 @@
   "packageManager": "pnpm@11.28.12",
   "scripts": {
     "test": "pnpm -r test",
+    "test:unit": "node -e \"process.exit(require('node:child_process').spawnSync('pnpm',['--filter','./packages/*','test'],{stdio:'inherit',shell:process.platform==='win32',env:{...process.env,DOCCUE_SKIP_MODEL_TESTS:'1'}}).status??1)\"",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
     "try": "pnpm --filter @doccue/core try",

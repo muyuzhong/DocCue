@@ -25,6 +25,70 @@ jobs:
       - run: pnpm build
       - run: pnpm typecheck
       - name: Tests without the model
-        run: pnpm --filter "./packages/*" test
-        env:
-          DOCCUE_SKIP_MODEL_TESTS: '1'
+        run: pnpm test:unit
+      - name: Verify packed packages and basic example
+        run: |
+          TMP="$(mktemp -d)"
+          trap 'rm -rf "$TMP"' EXIT
+          pnpm --filter @doccue/protocol pack --pack-destination "$TMP"
+          pnpm --filter @doccue/core pack --pack-destination "$TMP"
+          pnpm --filter @doccue/bridge pack --pack-destination "$TMP"
+          cp -r examples/basic "$TMP/basic"
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const dir = process.argv[1];
+            const files = fs.readdirSync(dir);
+            const tgz = (name) => {
+              const match = files.find((f) => f.includes(`doccue-${name}-`) && f.endsWith(".tgz"));
+              if (!match) throw new Error(`missing tarball for ${name} in ${files.join(", ")}`);
+              return path.join(dir, match);
+            };
+            const pkgPath = path.join(dir, "basic", "package.json");
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+            pkg.dependencies["@doccue/core"] = `file:${tgz("core")}`;
+            pkg.dependencies["@doccue/bridge"] = `file:${tgz("bridge")}`;
+            pkg.overrides = { "@doccue/protocol": `file:${tgz("protocol")}` };
+            fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2));
+          ' "$TMP"
+          npm --prefix "$TMP/basic" install --no-audit --no-fund --offline
+          node -e '
+            const { spawn } = require("node:child_process");
+            const dir = process.argv[1];
+            const port = 3456;
+            const child = spawn(process.execPath, ["server.js"], {
+              cwd: dir,
+              env: { ...process.env, PORT: String(port), ANTHROPIC_API_KEY: "sk-smoke" },
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            let stderr = "";
+            child.stderr.on("data", (d) => (stderr += d));
+            (async () => {
+              try {
+                const base = `http://127.0.0.1:${port}`;
+                let ready = false;
+                for (let i = 0; i < 50; i++) {
+                  try {
+                    const res = await fetch(`${base}/`);
+                    if (res.ok) { ready = true; break; }
+                  } catch {}
+                  await new Promise((r) => setTimeout(r, 100));
+                }
+                if (!ready) throw new Error(`server did not start: ${stderr}`);
+                const checks = [
+                  [await fetch(`${base}/`), 200, "text/html"],
+                  [await fetch(`${base}/vendor/bridge/index.js`), 200, "text/javascript"],
+                  [await fetch(`${base}/vendor/protocol/index.js`), 200, "text/javascript"],
+                  [await fetch(`${base}/doccue/turn`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }), 400, "application/json"],
+                ];
+                for (const [res, status, ct] of checks) {
+                  if (res.status !== status || !(res.headers.get("content-type") || "").includes(ct)) {
+                    throw new Error(`${res.url}: got ${res.status} (${res.headers.get("content-type")}), expected ${status} (${ct})`);
+                  }
+                }
+                console.log("Packed packages + examples/basic smoke check passed.");
+              } finally {
+                child.kill();
+              }
+            })().catch((err) => { console.error(err); process.exit(1); });
+          ' "$TMP/basic"

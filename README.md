@@ -1,8 +1,11 @@
 # DocCue
 
+[![CI](https://github.com/muyuzhong/DocCue/actions/workflows/ci.yml/badge.svg)](https://github.com/muyuzhong/DocCue/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > Turn static docs into context-aware in-app cues.
 
-English · [简体中文](README.zh-CN.md)
+English · [简体中文](README.zh-CN.md) · [API Reference](docs/api.md)
 
 Complex apps take time to learn, and their docs live on a website, away from the app. DocCue is **an onboarding tour that is an agent**: it sits in your web app, and when a user asks "how do I…" or "why doesn't this work", it answers from what they just did on the screen, then shows them on the page, step by step.
 
@@ -96,14 +99,15 @@ cue.stop();    // stops the answer and closes the guide
 cue.reset();   // starts a new conversation
 ```
 
-Mark your own chat UI with `data-cue-ignore`, so typing in it isn't recorded as an action (the built-in panel already is).
+Mark your own chat UI with `data-cue-ignore`, so typing in it isn't recorded as an action (the built-in panel already is). For all options, custom tools, custom doc/model providers, HTML attributes (`data-cue-id`, `data-cue-error`), CSS variables and known boundaries (host Shadow DOM, iframes, `<canvas>`), see the [API & Integration Reference](docs/api.md).
 
 ### Security and privacy
 
 - The request body (question, screen, conversation, the bridge's `user`) all comes from the browser and is as trustworthy as what the user types. Attributes that must hold, like role or plan, belong in `createHandler`'s `user`, taken from your server-side session; they override what the browser sends.
-- The endpoint is open: put sign-in and rate limits on it in your own routes and middleware. It calls your model for whoever reaches it.
+- The endpoint is open: put sign-in and rate limits on it in your own routes and middleware. It calls your model for whoever reaches it. When your endpoint expects auth headers or cross-origin cookies, pass `headers` (static or an async function), `credentials: 'include'`, or a custom `fetch` to `createBridge`.
 - The bridge records locally and uploads only when the user asks. Passwords are recorded as "filled in", never their content.
 - The backend stores nothing. The conversation is in the browser's sessionStorage, one per tab. After a full page load the bridge on the new page carries on with the guide and the answer, so multi-page apps work as long as every page calls `createBridge`.
+- See [SECURITY.md](SECURITY.md) for the full trust model and vulnerability reporting.
 
 ## Examples
 
@@ -122,6 +126,8 @@ No runtime dependencies: the adapters talk to the APIs with plain `fetch`.
 | `createOpenAI` | OpenAI and every OpenAI-compatible API (Ollama, vLLM, LM Studio, gateways) | Adjacent user messages are merged, for local models that need roles to alternate |
 
 Both drop a stream that sends nothing for 60 seconds (keep-alives count), retry rate limits and server errors with `withRetry` (only before any output), and log every call's full request and timing with `withModelLog`. `createModelFromEnv` builds one from environment variables: see [.env.example](.env.example).
+
+**Choosing a model**: `createModelFromEnv` defaults Anthropic to `claude-opus-5-5`, which is thorough but heavier than most help widgets need. For production latency and cost, a fast model such as `claude-haiku-5-5` (used for the Grafana and Homebox verifications) works well; keeping prompt caching enabled (`DOCCUE_PROMPT_CACHE=on`, on by default on the official Anthropic API) lets repeated turns and multi-step guides hit the cache for the system prompt, docs, and prior history. You can also plug in any other provider by implementing `ModelAdapter` (see [docs/api.md](docs/api.md#custom-modeladapter)).
 
 ## Try it from this repository
 
@@ -159,10 +165,11 @@ Why won't it connect?
 | `pnpm try [--tool] "question"` | One turn; `--tool` adds a demo tool that tells the time, to test the loop |
 | `pnpm chat` | Multi-turn chat; logs go to `packages/core/.logs/` |
 | `pnpm replay <log> [n]` | Lists the model calls in a log; with a number, sends that call again to compare answers |
-| `pnpm test` | Tests. No fake models: tests of the agent's behaviour call the real model from `.env`, with the playground in the local Chrome |
+| `pnpm test:unit` | Offline unit tests in `packages/*` (no API key needed) |
+| `pnpm test` | Full tests. No fake models: tests of the agent's behaviour call the real model from `.env`, with the playground in the local Chrome |
 | `pnpm typecheck` / `pnpm build` | Type-check / build |
 
-CI runs the build, the type check and the tests that call no model on every push; the tests with the model run by hand (see [.github/workflows](.github/workflows)).
+CI runs the build, type-check, offline unit tests, and a packed-package smoke check against `examples/basic` on every push; tests with a real model run by hand (see [.github/workflows](.github/workflows)). See [CONTRIBUTING.md](CONTRIBUTING.md) if you'd like to contribute.
 
 ## Architecture
 
@@ -211,6 +218,11 @@ examples/                apps that use the published packages
 Later: screenshots on demand (charts, canvases), preset first-run tours, Skills, proactive hints, redaction.
 
 Not planned: built-in vector search; bridges for native clients (Qt, WPF, native Android/iOS).
+
+## Contributing & Changelog
+
+- Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, offline testing (`pnpm test:unit`), and PR guidelines.
+- See [CHANGELOG.md](CHANGELOG.md) for release history and [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## License
 

@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a bug in @doccue/core, @doccue/bridge, or @doccue/protocol
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal HTML/code snippet or steps in playground/examples.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      value: |
+        - DocCue version:
+        - Node.js / runtime:
+        - Browser & OS:
+        - Frontend framework / UI library (if any):
+        - Model provider & model ID (if relevant):
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screen snapshot / logs (optional)
+      description: Paste `bridge.perceive()` output or relevant JSONL log lines. Please remove any API keys or sensitive user data first.
+      render: json

@@ -1,8 +1,11 @@
 # DocCue
 
+[![CI](https://github.com/muyuzhong/DocCue/actions/workflows/ci.yml/badge.svg)](https://github.com/muyuzhong/DocCue/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 > Turn static docs into context-aware in-app cues.
 
-[English](README.md) · 简体中文
+[English](README.md) · 简体中文 · [API 参考（英文）](docs/api.md)
 
 复杂的应用上手慢，文档又放在官网上。DocCue 是**新手引导的 agent 版**：嵌在你的 Web 应用里，用户问"怎么做"或"为什么不行"，它结合用户刚才在界面上做了什么来回答，并在页面上一步步指给用户看。
 
@@ -86,10 +89,11 @@ playground 是一个模拟的「数据平台」，右下角是 bridge 自带的�
 | `pnpm try [--tool] "问题"` | 跑单轮；`--tool` 挂一个查时间的演示工具，测多步循环 |
 | `pnpm chat` | 多轮对话，日志写到 `packages/core/.logs/` |
 | `pnpm replay <日志> [编号]` | 列出日志里的模型调用；带编号则把那次调用原样重发，对比前后两次回答 |
-| `pnpm test` | 测试。不用假模型：涉及模型的测试调 `.env` 里的真实模型，前端在本机 Chrome 里跑 playground |
+| `pnpm test:unit` | 不调模型的离线单元测试（`packages/*`，不需要 API key） |
+| `pnpm test` | 全量测试。不用假模型：涉及模型的测试调 `.env` 里的真实模型，前端在本机 Chrome 里跑 playground |
 | `pnpm typecheck` / `pnpm build` | 类型检查 / 构建 |
 
-每次推送，CI 会跑构建、类型检查和不调模型的测试；调真实模型的测试要手动触发（见 [.github/workflows](.github/workflows)）。
+每次推送，CI 会跑构建、类型检查、离线单元测试，以及用打包产物验证 `examples/basic`；调真实模型的测试要手动触发（见 [.github/workflows](.github/workflows)）。参与贡献请见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 接入你的应用
 
@@ -143,7 +147,9 @@ cue.reset();    // 开始新对话
 
 自己做的问答框要加 `data-cue-ignore`，免得用户在里面打字也被当成操作记下来（自带问答窗已经加了）。bridge 平时只在浏览器本地记录，提问时才上传；密码只记"填写过"，不记内容。
 
-接口是开放的，鉴权和限流由你在自己的路由和中间件里处理。后端不保存对话：对话记录在浏览器的 sessionStorage 里，每个标签页一份。整页刷新或跳转后，新页面上的 bridge 会接着之前的引导和回答，所以多页应用也能用，只要每个页面都调用 `createBridge`。
+接口是开放的，鉴权和限流由你在自己的路由和中间件里处理；如果接口需要认证请求头（如 Bearer token、CSRF token）或跨域 Cookie，可以给 `createBridge` 传 `headers`（支持静态对象或异步函数）、`credentials: 'include'` 或自定义 `fetch`。后端不保存对话：对话记录在浏览器的 sessionStorage 里，每个标签页一份。整页刷新或跳转后，新页面上的 bridge 会接着之前的引导和回答，所以多页应用也能用，只要每个页面都调用 `createBridge`。
+
+完整的参数说明、自定义后端工具、自定义文档/模型适配器、HTML 属性（`data-cue-id`、`data-cue-error`）、CSS 变量以及当前边界（宿主内部 Shadow DOM、`<iframe>`、`<canvas>` 图表）见 [API 参考](docs/api.md)，安全信任边界与漏洞上报见 [SECURITY.md](SECURITY.md)。
 
 ## 接入示例
 
@@ -162,6 +168,8 @@ cue.reset();    // 开始新对话
 | `createOpenAI` | OpenAI，以及所有 OpenAI 兼容接口（Ollama、vLLM、LM Studio、各类网关） | 相邻的用户消息会合并，兼容要求角色交替的本地模型 |
 
 两者都支持：60 秒收不到任何数据就断开（心跳包也算数据）、`withRetry` 对限流和服务端错误自动重试（只在还没输出时重试）、通过 `withModelLog` 记录每次调用的完整请求和耗时。`createModelFromEnv` 从环境变量创建适配器，变量见 [.env.example](.env.example)。
+
+**模型选型与成本**：`createModelFromEnv` 在 Anthropic 下默认使用 `claude-opus-5-5`，对应用内帮助浮窗而言成本和延迟偏高。生产环境推荐优先试轻量快速的模型（Grafana 与 Homebox 的完整验证均使用 `claude-haiku-5-5`）；开启提示词缓存（`DOCCUE_PROMPT_CACHE=on`，Anthropic 官方地址默认开启）后，多轮问答和多步引导中的系统提示词、文档和历史对话都能持续命中缓存。也可以实现 `ModelAdapter` 接入任意其他模型服务（见 [docs/api.md](docs/api.md#custom-modeladapter)）。
 
 ## 架构
 
@@ -212,6 +220,11 @@ examples/                用已发布的包接入的示例应用
 以后再做：按需截图（图表、画布）、预置的首次引导、接入 Skill、主动提示、脱敏。
 
 不做：内置向量检索、原生客户端（Qt、WPF、安卓/iOS 原生等）的 bridge。
+## 参与贡献与变更日志
+
+- 欢迎提 Issue 和 PR，开发环境、离线测试（`pnpm test:unit`）与提交规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 版本变更见 [CHANGELOG.md](CHANGELOG.md)，安全漏洞上报见 [SECURITY.md](SECURITY.md)。
+
 ## 许可证
 
 [MIT](LICENSE)
