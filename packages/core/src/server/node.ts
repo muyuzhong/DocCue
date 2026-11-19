@@ -6,13 +6,15 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import type { FetchHandler } from './handler.js';
 
-type NodeRequest = IncomingMessage & { originalUrl?: string };
+type NodeRequest = IncomingMessage & { originalUrl?: string; body?: unknown };
 
 /** The returned function never rejects: whatever goes wrong is answered on `res`. */
 export function toNodeHandler(handler: FetchHandler): (req: NodeRequest, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
     const controller = new AbortController();
-    res.on('close', () => controller.abort());
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
 
     let request: Request;
     try {
@@ -55,13 +57,30 @@ function toRequest(req: NodeRequest, signal: AbortSignal): Request {
     else if (value !== undefined) headers.set(name, value);
   }
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
+  let bodyInit: { body?: BodyInit; duplex?: 'half' } = {};
+  if (hasBody) {
+    if (req.body !== undefined) {
+      // Middleware such as `express.json()` already read the stream and put the result on `req.body`.
+      headers.delete('content-length');
+      headers.delete('content-encoding');
+      bodyInit = { body: parsedBody(req.body) };
+    } else {
+      bodyInit = { body: Readable.toWeb(req) as ReadableStream<Uint8Array>, duplex: 'half' };
+    }
+  }
   const init: RequestInit & { duplex?: 'half' } = {
     method: req.method ?? 'GET',
     headers,
     signal,
-    ...(hasBody ? { body: Readable.toWeb(req) as ReadableStream<Uint8Array>, duplex: 'half' } : {}),
+    ...bodyInit,
   };
   return new Request(url, init);
+}
+
+function parsedBody(body: unknown): BodyInit {
+  if (typeof body === 'string') return body;
+  if (body instanceof Uint8Array) return new Uint8Array(body);
+  return JSON.stringify(body);
 }
 
 function fail(res: ServerResponse, status: number, message: string): void {

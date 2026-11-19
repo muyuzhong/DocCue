@@ -6,12 +6,23 @@ import { respond } from '../src/agent/respond.js';
 import type { DocsProvider } from '../src/docs/docs.js';
 import { createMemoryLog } from '../src/log/log.js';
 import type { Tool } from '../src/loop/types.js';
+import { createAnthropic } from '../src/model/anthropic.js';
 import { parseSSE } from '../src/model/sse.js';
+import type { ModelAdapter } from '../src/model/types.js';
 import { parseTurnRequest } from '../src/protocol/parse.js';
 import { createHandler } from '../src/server/handler.js';
 import { toNodeHandler } from '../src/server/node.js';
-import { collect } from './helpers.js';
+import { collect, mockFetch, sseResponse } from './helpers.js';
 import { describeWithModel, realModel, rejectedModel } from './model.js';
+
+/** A model for tests where the handler must turn the request away before calling the model. */
+const unusedModel: ModelAdapter = {
+  provider: 'unused',
+  model: 'unused',
+  async *stream() {
+    throw new Error('model should not be called');
+  },
+};
 
 const INSTRUCTIONS = '你是「数据平台」的应用内助手。主机地址只填 IP 或域名，不带协议和端口。';
 
@@ -181,10 +192,12 @@ describeWithModel('createHandler', () => {
     for (let waited = 0; !records.some((record) => record.kind === 'model_call') && waited < 5000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50));
     expect(records.find((record) => record.kind === 'model_call')?.error?.name).toMatch(/Stopped|AbortError/);
   });
+});
 
+describe('createHandler (without a model)', () => {
   it('rejects other paths, methods and malformed bodies without calling the model', async () => {
     const { logger, records } = createMemoryLog();
-    const handler = createHandler({ model: rejectedModel(), basePath: '/doccue', logger });
+    const handler = createHandler({ model: unusedModel, basePath: '/doccue', logger });
     expect((await handler(post(ask('hi'), '/doccue/other'))).status).toBe(404);
     expect((await handler(new Request('http://localhost/doccue/turn'))).status).toBe(405);
     const bad = await handler(post({ v: 1, conversation: [{ type: 'user', text: 1 }] }));
@@ -194,11 +207,11 @@ describeWithModel('createHandler', () => {
   });
 });
 
-describeWithModel('limits', () => {
+describe('limits', () => {
   it('turns away bodies and requests over the limits, saying which, without calling the model', async () => {
     const { logger, records } = createMemoryLog();
     const handler = createHandler({
-      model: rejectedModel(),
+      model: unusedModel,
       basePath: '/doccue',
       logger,
       maxBodyBytes: 20_000,
@@ -275,7 +288,7 @@ describe('parseTurnRequest', () => {
   });
 });
 
-describeWithModel('createHandler when things go wrong', () => {
+describe('createHandler when things go wrong', () => {
   it('still ends the stream with an end event when something throws, and logs what it was', async () => {
     const { logger, records } = createMemoryLog();
     const docs: DocsProvider = {
@@ -285,7 +298,7 @@ describeWithModel('createHandler when things go wrong', () => {
       search: async () => [],
       read: async () => undefined,
     };
-    const handler = createHandler({ model: rejectedModel(), docs, basePath: '/doccue', logger });
+    const handler = createHandler({ model: unusedModel, docs, basePath: '/doccue', logger });
     const events = await readEvents(await handler(post(ask('hi'))));
     expect(events).toEqual([{ type: 'end', reason: 'error', item: { type: 'model', messages: [] }, usage: expect.any(Object), error: { message: 'internal error' } }]);
     expect(records.at(-1)).toMatchObject({ kind: 'end', reason: 'error', error: { message: 'docs index missing' } });
@@ -293,19 +306,21 @@ describeWithModel('createHandler when things go wrong', () => {
 
   it('replaces the user the browser sent with the one from the session', async () => {
     const { logger, records } = createMemoryLog();
-    const handler = createHandler({ model: rejectedModel(), basePath: '/doccue', logger, user: () => ({ role: 'viewer' }) });
+    const { fetch } = mockFetch(new Response('unauthorized', { status: 401 }));
+    const model = createAnthropic({ apiKey: 'k', model: 'claude-haiku-5-5', fetch });
+    const handler = createHandler({ model, basePath: '/doccue', logger, user: () => ({ role: 'viewer' }) });
     await readEvents(await handler(post({ ...ask('hi'), user: { role: 'admin' } })));
     const request = records.find((record) => record.kind === 'request');
     expect(request).toMatchObject({ request: { user: { role: 'viewer' } } });
   });
 });
 
-describeWithModel('toNodeHandler', () => {
+describe('toNodeHandler', () => {
   it('answers a request it cannot read with 400 instead of rejecting', async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
     process.on('unhandledRejection', onRejection);
-    const server = createServer((req, res) => void toNodeHandler(createHandler({ model: rejectedModel(), basePath: '/doccue' }))(req, res));
+    const server = createServer((req, res) => void toNodeHandler(createHandler({ model: unusedModel, basePath: '/doccue' }))(req, res));
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     try {
       const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
@@ -319,6 +334,97 @@ describeWithModel('toNodeHandler', () => {
       expect(rejections).toEqual([]);
     } finally {
       process.off('unhandledRejection', onRejection);
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('reads req.body when earlier middleware (like express.json) already consumed the stream', async () => {
+    const ev = (type: string, data: Record<string, unknown>) => ({ event: type, data: { type, ...data } });
+    const okAnswer = () =>
+      sseResponse([
+        ev('message_start', { message: { model: 'claude-haiku-5-5', usage: { input_tokens: 10 } } }),
+        ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } }),
+        ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: 'ok' } }),
+        ev('content_block_stop', { index: 0 }),
+        ev('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } }),
+        ev('message_stop', {}),
+      ]);
+    const { fetch } = mockFetch(okAnswer(), okAnswer(), okAnswer());
+    const handler = toNodeHandler(createHandler({ model: createAnthropic({ apiKey: 'k', model: 'claude-haiku-5-5', fetch }), basePath: '/doccue', maxBodyBytes: 5000 }));
+
+    let mode: 'json' | 'text' | 'raw' = 'json';
+    const server = createServer((req, res) => {
+      // Simulate body-parser middleware draining the stream before passing req to toNodeHandler.
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const raw = Buffer.concat(chunks);
+        const parsed = req as typeof req & { body?: unknown };
+        parsed.body = mode === 'json' ? JSON.parse(raw.toString('utf8')) : mode === 'text' ? raw.toString('utf8') : raw;
+        void handler(parsed, res);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/doccue/turn`;
+    try {
+      for (const current of ['json', 'text', 'raw'] as const) {
+        mode = current;
+        const response = await globalThis.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(ask('hi')) });
+        expect(response.status).toBe(200);
+        const events = await readEvents(response);
+        expect(textOf(events)).toBe('ok');
+        expect(endOf(events).reason).toBe('completed');
+      }
+      // Size limit still applies to pre-parsed bodies.
+      mode = 'json';
+      const huge = await globalThis.fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(ask('x'.repeat(6000))) });
+      expect(huge.status).toBe(413);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it('aborts the handler signal when the client disconnects mid-stream, and not on a normal finish', async () => {
+    let normalAborted = false;
+    let droppedAborted = false;
+    let releaseStream: (() => void) | undefined;
+    const server = createServer(
+      toNodeHandler(async (request) => {
+        if (new URL(request.url).pathname === '/normal') {
+          request.signal.addEventListener('abort', () => (normalAborted = true));
+          return new Response('ok');
+        }
+        request.signal.addEventListener('abort', () => {
+          droppedAborted = true;
+          releaseStream?.();
+        });
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('data: 1\n\n'));
+            releaseStream = () => {
+              releaseStream = undefined;
+              controller.close();
+            };
+          },
+        });
+        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+      }),
+    );
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      expect(await (await globalThis.fetch(`http://127.0.0.1:${port}/normal`)).text()).toBe('ok');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(normalAborted).toBe(false);
+
+      const socket = connect(port, '127.0.0.1');
+      socket.write('GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n');
+      await new Promise<void>((resolve) => socket.once('data', () => resolve()));
+      socket.destroy();
+      for (let waited = 0; !droppedAborted && waited < 1000; waited += 10) await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(droppedAborted).toBe(true);
+    } finally {
+      releaseStream?.();
       await new Promise((resolve) => server.close(resolve));
     }
   });

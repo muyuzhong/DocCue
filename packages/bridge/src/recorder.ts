@@ -350,15 +350,31 @@ export function createRecorder(options: RecorderOptions): Recorder {
       XHR.prototype.send = function (this: XMLHttpRequest, body?: Document | XMLHttpRequestBodyInit | null) {
         const info = meta.get(this);
         if (info && !options.skipUrl(info.url)) {
-          inflight++;
-          this.addEventListener('loadend', () => {
+          let aborted = false;
+          const onAbort = () => {
+            aborted = true;
+          };
+          const onEnd = () => {
             inflight--;
+            this.removeEventListener('abort', onAbort);
+            if (aborted) return;
             if (this.status === 0) failed(info.method, info.url, undefined, '');
             else if (this.status >= 400) {
               const text = this.responseType === '' || this.responseType === 'text' ? this.responseText : '';
               failed(info.method, info.url, this.status, text);
             }
-          });
+          };
+          this.addEventListener('abort', onAbort, { once: true });
+          this.addEventListener('loadend', onEnd, { once: true });
+          inflight++;
+          try {
+            return originalSend.call(this, body);
+          } catch (error) {
+            inflight--;
+            this.removeEventListener('abort', onAbort);
+            this.removeEventListener('loadend', onEnd);
+            throw error;
+          }
         }
         return originalSend.call(this, body);
       };

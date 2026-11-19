@@ -183,4 +183,26 @@ describe('the panel in other settings', () => {
     expect(shown[0]!.textContent).toBe('第 50 句');
     expect(shadow().querySelector('.earlier')!.textContent).toBe('更早的消息没有显示。');
   });
+
+  it('mounts only once on repeated calls, cleans up on destroy, and can mount again after unmount', async () => {
+    bridge = createBridge({ endpoint: '/doccue' });
+    const [first, second] = await Promise.all([bridge.mount(), bridge.mount()]);
+    expect(first).toBe(second);
+    expect(await bridge.mount()).toBe(first);
+    expect(document.querySelectorAll('[data-doccue-panel]')).toHaveLength(1);
+
+    first.unmount();
+    expect(document.querySelectorAll('[data-doccue-panel]')).toHaveLength(0);
+    panel = await bridge.mount();
+    expect(document.querySelectorAll('[data-doccue-panel]')).toHaveLength(1);
+
+    bridge.destroy();
+    expect(document.querySelectorAll('[data-doccue-panel]')).toHaveLength(0);
+    // Destroy while mount() is still in flight (e.g. React StrictMode cleanup) leaves no panel behind.
+    bridge = createBridge({ endpoint: '/doccue' });
+    const pending = bridge.mount();
+    bridge.destroy();
+    await pending;
+    expect(document.querySelectorAll('[data-doccue-panel]')).toHaveLength(0);
+  });
 });

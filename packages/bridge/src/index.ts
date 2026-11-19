@@ -1,5 +1,5 @@
 export type * from '@doccue/protocol';
-export { BridgeError, createBridge, fitConversation, type Bridge, type BridgeEvent, type BridgeOptions } from './bridge.js';
+export { BridgeError, createBridge, fitConversation, type Bridge, type BridgeEvent, type BridgeOptions, type FetchLike } from './bridge.js';
 export { DEFAULT_ERROR_SELECTORS, collectErrors, collectNotices, type PageError } from './errors.js';
 export { runGuide, type GuideEnd, type GuideOptions, type RunningGuide, type Theme } from './guide.js';
 export { describeElement, findByLocator } from './locate.js';

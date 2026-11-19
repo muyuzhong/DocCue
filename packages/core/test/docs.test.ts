@@ -181,7 +181,7 @@ describeWithModel('answering from the docs, with the real model', () => {
   });
 });
 
-describeWithModel('big docs', () => {
+describe('big docs', () => {
   it('shrinks a long table of contents level by level, then cuts it', () => {
     const files = Array.from({ length: 30 }, (_, i) => ({ path: `guide/${i}.md`, content: `# 指南 ${i}\n\n## 第一节\n\n### 细节\n\n正文。` }));
     const full = createDocs(files, { maxTocChars: 100_000 }).toc();
@@ -228,7 +228,9 @@ describeWithModel('big docs', () => {
     // Models sometimes send the part as a string.
     expect(await read.execute!({ id: 'long.md#长文', part: String(parts) }, { callId: 'c', signal: new AbortController().signal })).toBe(last);
   });
+});
 
+describeWithModel('big docs, with the real model', () => {
   it('lets the real model read on to a later part when the answer is there', async () => {
     // The only place the fact appears is the end of a long section, past the first part.
     const filler = Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 条：这一段介绍报表的配色、字体和导出格式，与数据源无关。${'说明文字'.repeat(120)}`);

@@ -208,6 +208,13 @@ describe('runGuide', () => {
     expect(running.stop()).toEqual({ completedSteps: 0 });
     await expect(running.done).resolves.toBeUndefined();
   });
+
+  it('follows --doccue-z (one below the panel) and --doccue-accent on the spotlight', () => {
+    start([{ selector: '#host', text: '填主机地址' }]);
+    const css = overlay()!.querySelector('style')!.textContent!;
+    expect(css).toContain('z-index: calc(var(--doccue-z, 2147483647) - 1)');
+    expect(css).toContain('var(--doccue-accent, #4f8cff)');
+  });
 });
 
 describe('findByLocator', () => {

@@ -182,4 +182,56 @@ describe('createRecorder', () => {
     recorder!.flush();
     expect(entries.map((entry) => entry.action)).toEqual([{ type: 'click', target: { role: 'button', name: '测试连接' } }]);
   });
+
+  it('ignores aborted XHR requests and does not leak inflight count on reuse or throw', async () => {
+    const FakeXHR = class extends EventTarget {
+      status = 0;
+      responseType = '';
+      responseText = '';
+      shouldThrow = false;
+      open(_method: string, _url: string | URL) {}
+      send() {
+        if (this.shouldThrow) throw new Error('invalid state');
+      }
+      abort() {
+        this.status = 0;
+        this.dispatchEvent(new Event('abort'));
+        this.dispatchEvent(new Event('loadend'));
+      }
+      finish(status: number, text = '') {
+        this.status = status;
+        this.responseText = text;
+        this.dispatchEvent(new Event('loadend'));
+      }
+    };
+    const originalXHR = window.XMLHttpRequest;
+    window.XMLHttpRequest = FakeXHR as unknown as typeof XMLHttpRequest;
+    try {
+      start(10);
+      const xhr = new (window.XMLHttpRequest as unknown as typeof FakeXHR)();
+      xhr.open('GET', '/api/search');
+      xhr.send();
+      expect(recorder!.busy()).toBe(true);
+      xhr.abort();
+      expect(recorder!.busy()).toBe(false);
+      // Reusing the same XHR instance after a throw must not leak inflight or double-fire listeners.
+      xhr.shouldThrow = true;
+      xhr.open('POST', '/api/save');
+      expect(() => xhr.send()).toThrow('invalid state');
+      expect(recorder!.busy()).toBe(false);
+      xhr.shouldThrow = false;
+      xhr.open('POST', '/api/save');
+      xhr.send();
+      xhr.finish(500, JSON.stringify({ message: 'save failed' }));
+      expect(recorder!.busy()).toBe(false);
+      await sleep(30);
+      expect(entries.map((entry) => entry.effects)).toEqual([
+        [{ type: 'request_failed', method: 'POST', path: '/api/save', status: 500, message: 'save failed' }],
+      ]);
+    } finally {
+      recorder?.stop();
+      recorder = undefined;
+      window.XMLHttpRequest = originalXHR;
+    }
+  });
 });

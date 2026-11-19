@@ -140,3 +140,119 @@ describe('leaving the page while an answer is on its way', () => {
     }
   });
 });
+
+describe('network capture with different endpoint shapes', () => {
+  const originalFetch = window.fetch;
+  beforeEach(() => {
+    sessionStorage.clear();
+    document.body.innerHTML = '<h1>仪表盘</h1>';
+  });
+  afterEach(() => {
+    window.fetch = originalFetch;
+  });
+
+  it('still records failed host requests when the bridge endpoint sits at a root path or another origin', async () => {
+    const failed = () => Promise.resolve(new Response(JSON.stringify({ message: 'boom' }), { status: 500 }));
+    for (const endpoint of ['https://doccue.example.com', '/', '/doccue']) {
+      sessionStorage.clear();
+      window.fetch = failed;
+      const bridge = createBridge({ endpoint, resultWindowMs: 10 });
+      try {
+        await window.fetch('/api/invite', { method: 'POST' });
+        await window.fetch('/doccue-other', { method: 'POST' });
+        await window.fetch(`${endpoint.replace(/\/+$/, '')}/turn`, { method: 'POST' });
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        const paths = bridge.recorded().flatMap((entry) => (entry.effects ?? []).map((effect) => (effect.type === 'request_failed' ? effect.path : '')));
+        expect(paths).toEqual(['/api/invite', '/doccue-other']);
+      } finally {
+        bridge.destroy();
+      }
+    }
+  });
+});
+
+describe('custom headers, credentials and fetch', () => {
+  const sseEnd = () =>
+    new Response(
+      `data: ${JSON.stringify({ type: 'text', delta: 'ok' })}\n\ndata: ${JSON.stringify({
+        type: 'end',
+        reason: 'completed',
+        item: { type: 'model', messages: [{ role: 'assistant', content: [{ type: 'text', text: 'ok' }] }] },
+        usage: { inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      })}\n\n`,
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    );
+
+  beforeEach(() => {
+    sessionStorage.clear();
+    document.body.innerHTML = '<h1>仪表盘</h1>';
+  });
+
+  it('sends static headers and credentials through a custom fetch without duplicating content-type', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const bridge = createBridge({
+      endpoint: 'https://api.example.com/doccue',
+      headers: { Authorization: 'Bearer token-1', 'Content-Type': 'application/json; charset=utf-8' },
+      credentials: 'include',
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        return sseEnd();
+      },
+    });
+    try {
+      await bridge.ask('你好');
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.url).toBe('https://api.example.com/doccue/turn');
+      expect(calls[0]!.init.credentials).toBe('include');
+      expect(calls[0]!.init.headers).toEqual({
+        authorization: 'Bearer token-1',
+        'content-type': 'application/json; charset=utf-8',
+      });
+    } finally {
+      bridge.destroy();
+    }
+  });
+
+  it('evaluates async header functions per request and skips fetch if stopped while awaiting headers', async () => {
+    let n = 0;
+    const seen: Array<Record<string, string>> = [];
+    const bridge = createBridge({
+      endpoint: '/doccue',
+      headers: async () => (++n === 1 ? { 'X-Token': 't1' } : undefined),
+      fetch: async (_url, init) => {
+        seen.push(init.headers as Record<string, string>);
+        return sseEnd();
+      },
+    });
+    try {
+      await bridge.ask('first');
+      await bridge.ask('second');
+      expect(seen).toEqual([
+        { 'content-type': 'application/json', 'x-token': 't1' },
+        { 'content-type': 'application/json' },
+      ]);
+    } finally {
+      bridge.destroy();
+    }
+
+    let release: (() => void) | undefined;
+    let called = 0;
+    const stopped = createBridge({
+      endpoint: '/doccue',
+      headers: () => new Promise((resolve) => (release = () => resolve({ Authorization: 'Bearer late' }))),
+      fetch: async () => {
+        called++;
+        return sseEnd();
+      },
+    });
+    try {
+      const pending = stopped.ask('wait');
+      stopped.stop();
+      release?.();
+      await pending;
+      expect(called).toBe(0);
+    } finally {
+      stopped.destroy();
+    }
+  });
+});

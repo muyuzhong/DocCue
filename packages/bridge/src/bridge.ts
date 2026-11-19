@@ -30,9 +30,20 @@ import { buildScreen } from './screen.js';
 import { whenSettled } from './settle.js';
 import { readAnswer } from './stream.js';
 
+export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
+
 export interface BridgeOptions {
   /** Where the DocCue handler is mounted, e.g. `/doccue`. */
   endpoint: string;
+  /**
+   * Extra HTTP headers sent on every request to the backend (e.g. `Authorization` or a CSRF token).
+   * Pass a function (sync or async) to supply fresh headers per request, such as a refreshing token.
+   */
+  headers?: HeadersInit | (() => HeadersInit | undefined | Promise<HeadersInit | undefined>);
+  /** Fetch credentials mode, e.g. `'include'` when the backend is on another origin and uses cookies. */
+  credentials?: RequestCredentials;
+  /** Custom `fetch` implementation for requests to the backend (e.g. an app's auth-aware wrapper). */
+  fetch?: FetchLike;
   /** The user's language, e.g. `zh-CN`. Defaults to the page's `lang`, then the browser's. */
   locale?: string;
   /** Your own wording for the bridge's UI (the guide's bubble and the chat panel), on top of the language's. */
@@ -230,6 +241,9 @@ export function createBridge(options: BridgeOptions): Bridge {
   let leaving = false;
 
   let running: AbortController | undefined;
+  let mounted: Panel | undefined;
+  let mounting: Promise<Panel> | undefined;
+  const noopPanel: Panel = { open() {}, close() {}, unmount() {} };
   /** The elements behind the numbers of the screen sent last. */
   let elements = new Map<number, Element>();
   const listeners = new Map<string, Set<(event: BridgeEvent) => void>>();
@@ -241,7 +255,10 @@ export function createBridge(options: BridgeOptions): Bridge {
     captureNetwork: options.captureNetwork ?? true,
     skipUrl: (url) => {
       try {
-        return new URL(url, document.location?.href).pathname.startsWith(new URL(endpoint, document.location?.href).pathname);
+        const base = document.location?.href;
+        const turn = new URL(`${endpoint}/turn`, base);
+        const parsed = new URL(url, base);
+        return parsed.origin === turn.origin && parsed.pathname === turn.pathname;
       } catch {
         return false;
       }
@@ -347,10 +364,16 @@ export function createBridge(options: BridgeOptions): Bridge {
       ...(locale ? { locale } : {}),
       ...(options.user ? { user: options.user } : {}),
     };
-    const response = await fetch(`${endpoint}/turn`, {
+    const extra = typeof options.headers === 'function' ? await options.headers() : options.headers;
+    signal.throwIfAborted();
+    const headers = new Headers(extra);
+    if (!headers.has('content-type')) headers.set('content-type', 'application/json');
+    const fetchImpl: FetchLike = options.fetch ?? ((input, init) => fetch(input, init));
+    const response = await fetchImpl(`${endpoint}/turn`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: Object.fromEntries(Array.from(headers, ([name, value]) => [name.toLowerCase(), value])),
       body: JSON.stringify(request),
+      ...(options.credentials ? { credentials: options.credentials } : {}),
       signal,
     });
     if (!response.ok || !response.body) {
@@ -534,8 +557,29 @@ export function createBridge(options: BridgeOptions): Bridge {
     maxQuestionChars,
     theme: options.theme ?? 'light',
     async mount(panelOptions) {
-      const { mountPanel } = await import('./panel/panel.js');
-      return mountPanel(bridge, { document, ...panelOptions });
+      if (destroyed) return noopPanel;
+      if (mounted) return mounted;
+      if (mounting) return mounting;
+      const pending = import('./panel/panel.js')
+        .then(({ mountPanel }) => {
+          if (destroyed) return noopPanel;
+          const raw = mountPanel(bridge, { document, ...panelOptions });
+          const panel: Panel = {
+            open: () => raw.open(),
+            close: () => raw.close(),
+            unmount() {
+              raw.unmount();
+              if (mounted === panel) mounted = undefined;
+            },
+          };
+          mounted = panel;
+          return panel;
+        })
+        .finally(() => {
+          if (mounting === pending) mounting = undefined;
+        });
+      mounting = pending;
+      return pending;
     },
     recorded: () => [...unsent],
     perceive: () => ({ at: Date.now(), screen: snapshot().screen, actions: [...unsent] }),
@@ -549,6 +593,7 @@ export function createBridge(options: BridgeOptions): Bridge {
       document.defaultView?.removeEventListener('pageshow', onReturn);
       recorder.stop();
       destroyed = true;
+      mounted?.unmount();
       listeners.clear();
       running?.abort();
       guide?.run?.stop();
