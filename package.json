@@ -2,7 +2,7 @@
   "name": "doccue",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.12.0",
+  "packageManager": "pnpm@11.28.12",
   "scripts": {
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
